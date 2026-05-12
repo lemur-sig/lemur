@@ -1,0 +1,2 @@
+numpy
+pycryptodome    # SHAKE128/SHAKE256 XOFs for deterministic sampling
