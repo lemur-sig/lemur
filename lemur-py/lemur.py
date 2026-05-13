@@ -6,7 +6,7 @@ at this level; all sub-scheme parameters are accessed via the injected instances
 """
 
 import numpy as np
-from Crypto.Hash import SHAKE256
+from Crypto.Hash import SHAKE128
 
 from kots import KOTS, inf_norm
 from hvc import HVC, bds_copy_state
@@ -42,7 +42,7 @@ class LEMUR:
     # -----------------------------------------------------------------------
 
     def _hash_to_randomizers(self, t: int, m: bytes, P: list, attempt: int) -> list:
-        """Sample N ternary randomizers w^i ∈ T_{alpha_w} via one SHAKE256 XOF.
+        """Sample N ternary randomizers w^i ∈ T_{alpha_w} via one SHAKE128 XOF.
 
         All N randomizers are streamed from a single XOF keyed on (t, m, P, attempt).
         """
@@ -54,7 +54,7 @@ class LEMUR:
             + pk_bytes
             + attempt.to_bytes(4, "little")
         )
-        xof = SHAKE256.new(domain)
+        xof = SHAKE128.new(domain)
         return [xof_ternary_poly(xof, self.alpha_w, self.kots.d) for _ in range(len(P))]
 
     @staticmethod
@@ -98,7 +98,7 @@ class LEMUR:
     @staticmethod
     def _slot_seed(master_seed: bytes, t: int) -> bytes:
         """Derive per-slot seed from master seed."""
-        return SHAKE256.new(
+        return SHAKE128.new(
             master_seed + b'slot' + t.to_bytes(4, 'little')
         ).read(32)
 
@@ -150,7 +150,7 @@ class LEMUR:
         """Sign(pp, sk_seed, t, m) -> (Z, d_open).
 
         sk_seed is the 32-byte master seed.
-        Z:      KOTS signature, shape (ell, m_dim, d).
+        Z:      KOTS signature, shape (m_dim, d).
         d_open: HVC opening for slot t.
         """
         kots_pp, hvc_pp = pp
@@ -276,16 +276,15 @@ class LEMUR:
                 return None
 
         n    = len(pks)
-        ell  = self.kots.ell
         m_   = self.kots.m
         d    = self.kots.d
 
         for attempt in range(1, self.gamma + 1):
             ws = self._hash_to_randomizers(t, m, pks, attempt)
 
-            Z_agg = np.zeros((ell, m_, d), dtype=np.int64)
+            Z_agg = np.zeros((m_, d), dtype=np.int64)
             for i in range(n):
-                Z_agg += self.kots.ring.scale_mat(ws[i], sigs[i][0])
+                Z_agg += self.kots.ring.scale_vec(ws[i], sigs[i][0])
 
             d_agg = self._scale_opening(ws[0], sigs[0][1])
             for i in range(1, n):

@@ -2,7 +2,7 @@
 
 use crate::profile::Profile;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::Shake256;
+use sha3::Shake128;
 
 /// Upper bound on the ring dimension `d` supported by the sampler.
 ///
@@ -327,7 +327,6 @@ pub fn xof_ternary_poly(xof: &mut dyn XofReader, weight: usize, d: usize) -> Vec
 /// KOTS setup: expand A2[i][j] from SHAKE128(seed || [i,j] || b"A"),
 /// where A = [I_n; A2] and only the lower block A2 is materialized.
 pub fn kots_setup_xof(seed: &[u8], i: usize, j: usize) -> impl XofReader {
-    use sha3::Shake128;
     let mut h = Shake128::default();
     h.update(seed);
     h.update(&[i as u8, j as u8]);
@@ -335,18 +334,18 @@ pub fn kots_setup_xof(seed: &[u8], i: usize, j: usize) -> impl XofReader {
     h.finalize_xof()
 }
 
-/// KOTS keygen: expand S[i][j] from SHAKE256(seed || [i,j] || b"S").
+/// KOTS keygen: expand S[i][j] from SHAKE128(seed || [i,j] || b"S").
 pub fn kots_keygen_xof(seed: &[u8], i: usize, j: usize) -> impl XofReader {
-    let mut h = Shake256::default();
+    let mut h = Shake128::default();
     h.update(seed);
     h.update(&[i as u8, j as u8]);
     h.update(b"S");
     h.finalize_xof()
 }
 
-/// KOTS sign hash H: SHAKE256(mu || j.to_le_bytes(4) || b"H").
+/// KOTS sign hash H: SHAKE128(mu || j.to_le_bytes(4) || b"H").
 pub fn kots_hash_xof(mu: &[u8], j: u32) -> impl XofReader {
-    let mut h = Shake256::default();
+    let mut h = Shake128::default();
     h.update(mu);
     h.update(&j.to_le_bytes());
     h.update(b"H");
@@ -355,7 +354,6 @@ pub fn kots_hash_xof(mu: &[u8], j: u32) -> impl XofReader {
 
 /// HVC setup: expand matrix entry from SHAKE128(seed || [i,j] || tag).
 pub fn hvc_setup_xof(seed: &[u8], i: usize, j: usize, tag: &[u8]) -> impl XofReader {
-    use sha3::Shake128;
     let mut h = Shake128::default();
     h.update(seed);
     h.update(&[i as u8, j as u8]);
@@ -373,7 +371,7 @@ pub fn agg_randomizer_xof(
     pk_bytes_concat: &[u8],
     attempt: usize,
 ) -> impl XofReader {
-    let mut h = Shake256::default();
+    let mut h = Shake128::default();
     h.update(&(t as u32).to_le_bytes());
     h.update(&(msg.len() as u32).to_le_bytes());
     h.update(msg);
@@ -382,9 +380,9 @@ pub fn agg_randomizer_xof(
     h.finalize_xof()
 }
 
-/// Per-slot seed derivation: SHAKE256(master_seed || b"slot" || t.to_le_bytes(4)).read(32).
+/// Per-slot seed derivation: SHAKE128(master_seed || b"slot" || t.to_le_bytes(4)).read(32).
 pub fn slot_seed(master_seed: &[u8], t: usize) -> [u8; 32] {
-    let mut h = Shake256::default();
+    let mut h = Shake128::default();
     h.update(master_seed);
     h.update(b"slot");
     h.update(&(t as u32).to_le_bytes());

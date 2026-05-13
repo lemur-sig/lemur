@@ -156,14 +156,13 @@ fn concat_pk_bytes(pks: &[LemurPk]) -> Vec<u8> {
 }
 
 fn scale_mat_profile(w: &[i64], z: &KotsSig, profile: &Profile) -> Vec<i64> {
-    let ell = profile.ell;
     let m = profile.m;
     if let Some(cfg) = profile.kots_crt() {
-        scale_vec_crt(w, &z.0, ell * m, &cfg.backend())
+        scale_vec_crt(w, &z.0, m, &cfg.backend())
     } else if let Some(rp64) = profile.kots_ring64.as_ref() {
-        lemur_rs::poly::scale_mat_u64(w, &z.0, ell, m, rp64)
+        lemur_rs::poly::scale_mat_u64(w, &z.0, 1, m, rp64)
     } else {
-        lemur_rs::poly::scale_mat(w, &z.0, ell, m, profile.kots_ring_u32())
+        lemur_rs::poly::scale_mat(w, &z.0, 1, m, profile.kots_ring_u32())
     }
 }
 
@@ -172,7 +171,7 @@ fn zero_fixture(pp: &LemurPp, n: usize) -> (Vec<LemurPk>, LemurAggSig) {
     let pk_len = profile.omega * profile.d;
     let label_len = profile.omega * profile.kappa * profile.d;
     let u_len = profile.k * profile.n * profile.kappa_prime * profile.d;
-    let z_len = profile.ell * profile.m * profile.d;
+    let z_len = profile.m * profile.d;
 
     let pks = (0..n)
         .map(|_| LemurPk(HvcCom(vec![0i64; pk_len])))
@@ -205,7 +204,7 @@ fn aggregate_repeated(
 ) -> LemurAggSig {
     let profile = pp.profile;
     let pks_bytes = concat_pk_bytes(pks);
-    let z_len = profile.ell * profile.m * profile.d;
+    let z_len = profile.m * profile.d;
     let n = pks.len();
     let n_unique = unique_sigs.len();
 

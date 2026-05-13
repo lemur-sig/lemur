@@ -67,6 +67,7 @@ cargo run --release --bin lemur -- vectors --tau 3 --signers 2 --slot 0 --msg "a
 cargo run --release --bin lemur -- sizes
 
 cargo run --release --bin bench -- --fast
+cargo run --release --bin bench_aggregate
 cargo run --release --bin bench_breakdown
 cargo run --release --bin bench_verify -- --zero-fixture --n 1048576 --reps 1
 ```
@@ -108,7 +109,7 @@ This reproduces the implemented aggregated-signature-size cell:
 
 | N | Table entry |
 | ---: | ---: |
-| `2^10` | 201.2 KB |
+| `2^10` | 194.7 KB |
 
 The larger signature-size cells are predicted Rice-encoded sizes for the
 corresponding `tau=20` rows in `parameter/summary.txt`.  Reproduce them with:
@@ -120,8 +121,8 @@ python3 rice_sizes.py
 
 | N | Worst-case row in `parameter/summary.txt` | Table entry |
 | ---: | ---: | ---: |
-| `2^15` | 331 KB | 283.5 KB |
-| `2^20` | 457 KB | 394.4 KB |
+| `2^15` | 331 KB | 275.3 KB |
+| `2^20` | 457 KB | 384.4 KB |
 
 Run the main timing benchmark:
 
@@ -169,8 +170,9 @@ Aggregation(2^15) = Aggregation(8192) * 32768 / 8192
 Aggregation(2^20) = Aggregation(8192) * 1048576 / 8192
 ```
 
-For the 24-thread run used in the paper, `Aggregation(8192) = 5.73 s`, giving
-approximately `23 s` and `12 min`.
+For the 24-thread run on AMD Ryzen AI 9 HX 370 used in the paper,
+`Aggregation(8192) = 2.95 s`, giving approximately `11.8 s` at `N=2^15` and
+`6.3 min` at `N=2^20`.
 
 Representative serialized sizes for `tau=20, N=1024`:
 
@@ -180,40 +182,121 @@ Representative serialized sizes for `tau=20, N=1024`:
 | Secret seed | 32 B |
 | Stateful signer cache | 134.4 KB |
 | Public key | 3.4 KB |
-| Individual signature | 89.5 KB |
-| Aggregated signature, `N=1024` | 201.2 KB |
+| Individual signature | 89.2 KB |
+| Aggregated signature, `N=1024` | 194.7 KB |
 
-Representative `bench --fast` timings from a 24-thread run:
+Representative `bench --fast` timings from a 24-thread run on AMD Ryzen AI 9
+HX 370 (single-core boost up to 5.16 GHz; all-core sustained ≈ 3.5–4 GHz under
+the default `powersave` governor):
 
 | Operation | Time |
 | --- | ---: |
-| Key generation | 1.3 min |
-| Online signing, KOTS only | 347 us |
-| Full signing, including HVC open | 1.3 min |
-| Stateful signing, BDS08 | 4.13 ms |
-| Individual pre-verify, `N=1024` | 1.67 s |
-| Aggregate after verified inputs, `N=1024` | 2.40 s |
-| Secure aggregation, `N=1024` | 567 ms |
-| Batch verification, `N=1024` | 30.1 ms |
-| Individual pre-verify, `N=8192` | 13.6 s |
-| Aggregate after verified inputs, `N=8192` | 37.6 s |
-| Secure aggregation, `N=8192` | 5.73 s |
-| Batch verification, `N=8192` | 223 ms |
+| Key generation | 1.2 min |
+| Online signing, KOTS only | 499 us |
+| Full signing, including HVC open | 1.2 min |
+| Stateful signing, BDS08 | 5.10 ms |
+| Individual pre-verify, `N=1024` | 1.56 s |
+| Aggregate after verified inputs, `N=1024` | 2.30 s |
+| Secure aggregation, `N=1024` | 1.14 s |
+| Batch verification, `N=1024` | 15.4 ms |
+| Individual pre-verify, `N=8192` | 12.4 s |
+| Aggregate after verified inputs, `N=8192` | 17.7 s |
+| Secure aggregation, `N=8192` | 2.95 s |
+| Batch verification, `N=8192` | 116.2 ms |
 
-Timings are machine-dependent.
+Timings are machine-dependent and laptop-thermal-state sensitive; with
+`powersave` governor and frequency-boost enabled, per-run noise of a few
+percent is normal. To minimise jitter, use a stable thermal envelope (e.g.
+desktop / server) or pin the CPU frequency with
+`cpupower frequency-set`.
+
+### Aggregation sub-step breakdown
+
+`cargo run --release --bin bench_aggregate` produces an end-to-end-to-sub-step
+attribution of `lemur_aggregate` and `lemur_avrfy`. Representative results at
+$\tau=20$ on the same 24-thread machine:
+
+**Aggregation (`lemur_aggregate`) sub-steps:**
+
+| Step | `N=1024` | `N=8192` |
+| --- | ---: | ---: |
+| Individual pre-verify (×N, rayon) | 180 ms (15.7%) | 1.37 s (47.7%) |
+| PK serialization (`concat_pk_bytes`) | 6.7 ms (0.6%) | 60.9 ms (2.1%) |
+| Randomizer derivation (SHAKE128) | 5.3 ms (0.5%) | 43.8 ms (1.5%) |
+| KOTS aggregate `Σ wᵢ·zᵢ` | 9.4 ms (0.8%) | 64.2 ms (2.2%) |
+| HVC opening aggregate `Σ wᵢ·dᵢ` | 921 ms (80.4%) | 1.29 s (44.9%) |
+| `avrfy` probe (close-loop check) | 15.4 ms (1.3%) | 119 ms (4.2%) |
+| **End-to-end `lemur_aggregate`** | **1.15 s** | **2.86 s** |
+
+**Batch verification (`lemur_avrfy`) sub-steps:**
+
+| Step | `N=1024` | `N=8192` |
+| --- | ---: | ---: |
+| PK serialization | 6.7 ms (43.7%) | 60.9 ms (51.6%) |
+| Randomizer derivation | 5.4 ms (34.9%) | 47.1 ms (39.9%) |
+| HVC commitment aggregate `Σ wᵢ·Tᵢ` | 0.88 ms (5.7%) | 6.5 ms (5.5%) |
+| HVC sVrfy (Babai decode + verify) | 1.36 ms (8.8%) | 1.26 ms (1.1%) |
+| KOTS sVrfy | 0.26 ms (1.7%) | 0.27 ms (0.2%) |
+| **End-to-end `lemur_avrfy`** | **15.4 ms** | **118 ms** |
+
+`bench_aggregate` is also the source of the new NTT-domain aggregation
+microbenchmark used in the paper's implementation-notes section.
+
+#### Scope: this profile only measures the `N=2^10` parameter cell
+
+The Rust artifact ships a single parameter profile, `D256_K4`, with
+`profile.n_signers = 1024`, `beta_agg = 919 945`, `eta = 776`, `omega = 2`,
+`kappa = 5`. The paper's `N ∈ {2^15, 2^17, 2^20}` rows are **different
+parameter cells** (larger `k, m, omega, eta, beta_agg`; see
+`parameter/summary.txt`), not just the same scheme at larger N. Running
+`bench_aggregate` at N > 8192 against the shipped profile would only
+stress-test it out of spec, not measure the paper's larger-N cells.
+
+For the paper's `N=2^10` row, use the `bench_aggregate` numbers above. For
+`N ∈ {2^15, 2^17, 2^20}`:
+
+- **Sizes**: reproduce via `python3 parameter/rice_sizes.py`, which applies
+  the Rice-encoding cost model to the appropriate `summary.txt` row (no
+  separate implementation profile needed).
+- **Batch-verification timings**: use `bench_verify --zero-fixture`, which
+  times only `lemur_avrfy` on an accepting all-zero PK/aggregate fixture
+  (no per-N aggregation prep needed, no profile switch needed for the
+  asymptotic behaviour).
+- **Aggregation timings**: keep as extrapolated from the `bench --fast`
+  `N=8192` row, noting that the linear scaling is approximate because of
+  the KOTS no-wrap fast/slow-path transition at `N ≈ 10 739`. A more
+  faithful measurement would require instantiating a fresh profile for
+  each `summary.txt` row.
+
+Note for future maintainers: `bench_aggregate`'s fixture replicates 2 unique
+signer keypairs to fill the N-slot test. At replication ≥ 4096, the
+bunched-randomizers per-pk sum can amplify the aggregated norms past
+`beta_agg`, causing `lemur_aggregate` to exhaust its `γ=10` retry budget.
+This is a fixture artifact (real deployments have N distinct signers, not
+replicated copies), so 2 unique signers is fine for the supported N ≤ 8192;
+bumping past N=8192 would also require a higher `unique_signers` setting.
 
 A note on aggregated-signature sizes:  the `lemur sizes` numbers in the
-serialized-size table above (e.g. 201.2 KB at `N=1024`) are the **predicted**
+serialized-size table above (e.g. 194.7 KB at `N=1024`) are the **predicted**
 encoding lengths.  For Rice-coded components — Babai path, sibling labels,
-and `u` — the per-coefficient cost is estimated from the folded-Gaussian
-mean unary tail (`0.7979·σ / 2^k`) plus a small conservative pad for the
-sign bit and unary terminator.  `lemur sizes` marks these totals with a
-leading `~` to flag that they are estimates.  A `bench --fast` run also
-prints an `Agg Sig Size` line, but that is the **realised** length of one
-specific encoded aggregate, which fluctuates by a few percent around the
-formula because Rice output length is data-dependent.  Treat the formula
-number as the headline figure; the per-run measurement is informational
-only.
+and `u` — the per-coefficient cost is the analytic mean of the Rice
+codeword length under a continuous-Gaussian model `X ~ N(0, σ²)` on the
+coefficient:
+
+```
+E[L] = k + 2 − P(X = 0) + Σ_{j ≥ 1} erfc(j·2^k / (σ·√2))
+```
+
+(`k+1` if `X = 0`, else `k + 2 + ⌊|X|/2^k⌋`).  This is computed in
+`lemur-py/codec.py:_rice_bits_per_coef`, `lemur-rs/src/codec.rs:rice_bits_per_coef`
+(via `libm::erfc`), and `parameter/rice_sizes.py:rice_bits_per_coef`.
+Per-polynomial byte counts are byte-aligned with `ceil`.  `lemur sizes`
+marks these totals with a leading `~` to flag that they are estimates.
+A `bench --fast` run also prints an `Agg Sig Size` line, but that is the
+**realised** length of one specific encoded aggregate, which fluctuates
+by a few percent around the formula because Rice output length is
+data-dependent.  Treat the formula number as the headline figure; the
+per-run measurement is informational only.
 
 For large batch-verification timings, use `bench_verify --zero-fixture`.  It
 times only `lemur_avrfy` on an accepting all-zero public-key/aggregate fixture,

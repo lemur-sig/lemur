@@ -28,11 +28,11 @@ class GaussianSampler:
     profiles.py) convert and pass sigma here.  The sampler itself is
     agnostic to the convention.
 
-    cdt_bits=32 is the byte-aligned implementation of the 31-bit CDF
-    precision bound from the discrete-Gaussian Renyi-divergence analysis:
-    the 32-bit read supplies 31 bits of CDF comparison plus one sign
-    bit (LSB), which is exactly the `prec_re = 31` target at
-    lambda = 128 for the shipped parameter set.
+    cdt_bits=32 is a byte-aligned implementation choice for the
+    discrete-Gaussian Renyi-divergence bound: the 32-bit read supplies
+    31 bits of CDF comparison plus one sign bit (LSB).  For the shipped
+    D256_K4 profile, parameter/Lemur-DGS-Prec_TailCut.py computes
+    prec_re=28, so the implementation keeps a 3-bit comparison margin.
     tailcut=5 sigma is sufficient by the same analysis
     (`tc_re = 5`).
     """

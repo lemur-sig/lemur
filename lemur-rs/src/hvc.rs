@@ -31,12 +31,14 @@ use sha3::digest::XofReader;
 
 use crate::error::LemurError;
 use crate::kots::{inf_norm, KotsPk};
+use crate::ntt::{mont_mul_u64, ntt_inverse_u64};
 use crate::poly::{
     mac_ntt, mac_ntt_u64, mat_to_ntt, mat_to_ntt_u64, mat_vec_prentt, mat_vec_prentt_pair,
     mat_vec_prentt_pair_u64, mat_vec_prentt_u64, ntt_to_poly_buf, ntt_to_poly_buf_u64,
     poly_to_ntt, poly_to_ntt_buf, poly_to_ntt_buf_u64, scale_vec_with_ntt_w,
     scale_vec_with_ntt_w_u64, RingParams, RingParams64,
 };
+use rayon::prelude::*;
 use crate::profile::{HvcRing, Profile};
 use crate::sample::{hvc_setup_xof, xof_uniform_poly};
 
@@ -1428,6 +1430,349 @@ pub fn scale_opening_any(w: &[i64], opening: &HvcOpening, profile: &Profile) -> 
 }
 
 // ---------------------------------------------------------------------------
+// NTT-domain opening aggregation
+// ---------------------------------------------------------------------------
+//
+// `aggregate_openings_any` computes `Σᵢ wᵢ · openingᵢ` over N signers in one
+// pass.  The reference path (`scale_opening_any` per signer + `add_openings`
+// to reduce) performs `N × (2τ+1) · ωκ` inverse NTTs — one per poly per
+// signer — and accumulates in the coefficient domain.  Because the inverse
+// NTT distributes over addition (the NTT is `R_q`-linear), we can swap the
+// order of operations:
+//
+//   Σᵢ INTT(NTT(wᵢ) ⊗ NTT(openingᵢ))  =  INTT(Σᵢ NTT(wᵢ) ⊗ NTT(openingᵢ))
+//
+// and pay only `(2τ+1) · ωκ` inverse NTTs total — independent of N.  The
+// per-signer forward NTTs are unavoidable (the openings on the wire are
+// coefficient-domain bytes), but the inverse-NTT half of the work, the
+// dominant cost at large N, drops by a factor of N.  Bit-exact result.
+//
+// Overflow safety (u64 HVC ring).  For `D256_K4` the HVC modulus is
+// slightly above `2^53` and Montgomery products live in `[0, q)`.  Two
+// safe-zone strategies are combined:
+//
+//   1. **Bounded chunk accumulation.**  Per-chunk we add up to
+//      `REDUCE_INTERVAL` Montgomery products with `wrapping_add`; the
+//      running value stays in `[0, chunk_size · q)`.  The chunk size is
+//      capped dynamically so `chunk_size · (q-1) ≤ u64::MAX`; for the
+//      shipped profile this keeps the default `REDUCE_INTERVAL = 1024`.
+//      At the end of the chunk we reduce each slot mod q before it reaches
+//      any signed reducer.
+//
+//   2. **Reduce-on-merge.**  When rayon combines two chunk accumulators
+//      we add two values in `[0, q)` to get a value in `[0, 2q) ≈ 2^54`
+//      and conditionally subtract `q`, restoring `[0, q)` invariantly.
+//      No further headroom is consumed across the reduction tree.
+//
+// With this design the implementation is correct up to any practically
+// representable N (the rayon reduction tree has `O(log N)` depth but the
+// per-step invariant is the same).  The final inverse NTT operates on
+// already-reduced inputs.
+//
+// For the u32 ring (not used by the shipped profile but kept for forward
+// compatibility) we fall back to the reference implementation.
+// ---------------------------------------------------------------------------
+
+/// Preferred number of contributions added with `wrapping_add` between full
+/// mod-q reductions on the u64 HVC ring.  The runtime chunk size is capped by
+/// `lazy_reduce_interval(q)` so future larger HVC moduli cannot overflow this
+/// lazy accumulator.
+const REDUCE_INTERVAL: usize = 1024;
+
+#[inline]
+fn lazy_reduce_interval(q: u64) -> usize {
+    let max_terms = (u64::MAX as u128 / ((q - 1) as u128)) as usize;
+    REDUCE_INTERVAL.min(max_terms.max(1))
+}
+
+#[inline(always)]
+fn reduce_slot_u64(x: u64, q: u64) -> u64 {
+    x % q
+}
+
+/// Conditional-subtract reduction for inputs already known to be in `[0, 2q)`.
+///
+/// Caller must ensure `q < 2^63` so that the two-operand `a + b` sum
+/// (with both in `[0, q)`) cannot overflow u64.  All shipped HVC moduli
+/// satisfy this with wide margin (`D256_K4` has `q ≈ 2^53`); the
+/// `debug_assert!` trips a future profile that pushes `q` toward `2^63`.
+#[inline(always)]
+fn cond_sub_q(x: u64, q: u64) -> u64 {
+    debug_assert!(q < (1u64 << 63), "cond_sub_q: q must fit in i64");
+    if x >= q {
+        x - q
+    } else {
+        x
+    }
+}
+
+/// Flat NTT-domain accumulator mirroring an `HvcOpening`'s segment layout.
+///
+/// Each `Vec<u64>` inside `path_acc[i]` / `sib_acc[i]` / `u_acc` is a single
+/// length-d NTT buffer for one polynomial slot of the corresponding
+/// opening segment.
+#[derive(Clone)]
+struct NttAcc {
+    path_acc: Vec<Vec<Vec<u64>>>, // [tau][n_polys_in_segment][d]
+    sib_acc: Vec<Vec<Vec<u64>>>,
+    u_acc: Vec<Vec<u64>>, // [n_polys_in_u][d]
+}
+
+impl NttAcc {
+    fn zero(ref_open: &HvcOpening, d: usize) -> Self {
+        let path_acc = ref_open
+            .path_labels
+            .iter()
+            .map(|label| {
+                let n = label.len() / d;
+                (0..n).map(|_| vec![0u64; d]).collect()
+            })
+            .collect();
+        let sib_acc = ref_open
+            .sibling_labels
+            .iter()
+            .map(|label| {
+                let n = label.len() / d;
+                (0..n).map(|_| vec![0u64; d]).collect()
+            })
+            .collect();
+        let n_u = ref_open.u.len() / d;
+        let u_acc = (0..n_u).map(|_| vec![0u64; d]).collect();
+        NttAcc {
+            path_acc,
+            sib_acc,
+            u_acc,
+        }
+    }
+
+    /// Reduce every slot mod q (used at the end of each accumulation chunk).
+    fn reduce_mod_q(&mut self, q: u64) {
+        for label in self.path_acc.iter_mut() {
+            for poly in label.iter_mut() {
+                for x in poly.iter_mut() {
+                    *x = reduce_slot_u64(*x, q);
+                }
+            }
+        }
+        for label in self.sib_acc.iter_mut() {
+            for poly in label.iter_mut() {
+                for x in poly.iter_mut() {
+                    *x = reduce_slot_u64(*x, q);
+                }
+            }
+        }
+        for poly in self.u_acc.iter_mut() {
+            for x in poly.iter_mut() {
+                *x = reduce_slot_u64(*x, q);
+            }
+        }
+    }
+
+    /// Merge `other` into `self`, both already reduced mod q.
+    /// Result stays in `[0, q)` via per-slot conditional subtract.
+    fn add_mod_q(&mut self, other: &NttAcc, q: u64) {
+        for (la, lb) in self.path_acc.iter_mut().zip(other.path_acc.iter()) {
+            for (pa, pb) in la.iter_mut().zip(lb.iter()) {
+                for (a, &b) in pa.iter_mut().zip(pb.iter()) {
+                    *a = cond_sub_q(*a + b, q);
+                }
+            }
+        }
+        for (la, lb) in self.sib_acc.iter_mut().zip(other.sib_acc.iter()) {
+            for (pa, pb) in la.iter_mut().zip(lb.iter()) {
+                for (a, &b) in pa.iter_mut().zip(pb.iter()) {
+                    *a = cond_sub_q(*a + b, q);
+                }
+            }
+        }
+        for (pa, pb) in self.u_acc.iter_mut().zip(other.u_acc.iter()) {
+            for (a, &b) in pa.iter_mut().zip(pb.iter()) {
+                *a = cond_sub_q(*a + b, q);
+            }
+        }
+    }
+
+    /// Add `w · opening` into `self` (NTT-domain MAC, `wrapping_add`).
+    /// Caller is responsible for invoking `reduce_mod_q` at most every
+    /// `REDUCE_INTERVAL` such adds to prevent u64 overflow.
+    fn mac(&mut self, w_hat: &[u64], opening: &HvcOpening, rp: &RingParams64, p_hat: &mut [u64]) {
+        let d = rp.d;
+        let q = rp.q;
+        let q_inv = rp.q_inv;
+        debug_assert_eq!(p_hat.len(), d);
+
+        let mut mac_one = |target: &mut [u64], coeffs: &[i64]| {
+            debug_assert_eq!(target.len(), d);
+            debug_assert_eq!(coeffs.len(), d);
+            poly_to_ntt_buf_u64(coeffs, rp, p_hat);
+            for k in 0..d {
+                let prod = mont_mul_u64(w_hat[k], p_hat[k], q, q_inv);
+                target[k] = target[k].wrapping_add(prod);
+            }
+        };
+
+        for (acc_label, sig_label) in self.path_acc.iter_mut().zip(opening.path_labels.iter()) {
+            let n = sig_label.len() / d;
+            for p in 0..n {
+                mac_one(&mut acc_label[p], &sig_label[p * d..(p + 1) * d]);
+            }
+        }
+        for (acc_label, sig_label) in self.sib_acc.iter_mut().zip(opening.sibling_labels.iter()) {
+            let n = sig_label.len() / d;
+            for p in 0..n {
+                mac_one(&mut acc_label[p], &sig_label[p * d..(p + 1) * d]);
+            }
+        }
+        let n_u = opening.u.len() / d;
+        for p in 0..n_u {
+            mac_one(&mut self.u_acc[p], &opening.u[p * d..(p + 1) * d]);
+        }
+    }
+
+    /// Finalize: inverse NTT each accumulator and emit an `HvcOpening` in
+    /// signed canonical form `(-q/2, q/2]`.
+    fn finalize_u64(mut self, rp: &RingParams64) -> HvcOpening {
+        let d = rp.d;
+        let q = rp.q;
+        let q_inv = rp.q_inv;
+        let inv_d = rp.inv_d_mont;
+        let half = (q / 2) as i64;
+        let q_i64 = q as i64;
+
+        let inv_one = |buf: &mut Vec<u64>| -> Vec<i64> {
+            ntt_inverse_u64(buf, rp.zetas, q, q_inv, inv_d);
+            buf.iter()
+                .map(|&x| {
+                    let v = rp.from_mont(x) as i64;
+                    if v > half {
+                        v - q_i64
+                    } else {
+                        v
+                    }
+                })
+                .collect()
+        };
+
+        let path_labels: Vec<Vec<i64>> = self
+            .path_acc
+            .iter_mut()
+            .map(|label| {
+                let n = label.len();
+                let mut flat = Vec::with_capacity(n * d);
+                for poly in label.iter_mut() {
+                    flat.extend(inv_one(poly));
+                }
+                flat
+            })
+            .collect();
+        let sibling_labels: Vec<Vec<i64>> = self
+            .sib_acc
+            .iter_mut()
+            .map(|label| {
+                let n = label.len();
+                let mut flat = Vec::with_capacity(n * d);
+                for poly in label.iter_mut() {
+                    flat.extend(inv_one(poly));
+                }
+                flat
+            })
+            .collect();
+        let mut u = Vec::with_capacity(self.u_acc.len() * d);
+        for poly in self.u_acc.iter_mut() {
+            u.extend(inv_one(poly));
+        }
+        HvcOpening {
+            path_labels,
+            sibling_labels,
+            u,
+        }
+    }
+}
+
+/// Aggregate N openings under N ternary scalars in one pass, accumulating
+/// in the HVC ring's NTT domain.  Parallel across signers via rayon: each
+/// chunk of up to `REDUCE_INTERVAL` signers builds a local NTT-domain
+/// accumulator (bounded by `chunk_size · (q-1) ≤ u64::MAX`), reduces mod q,
+/// and the per-chunk accumulators are tree-reduced with per-slot
+/// conditional-subtract to keep the invariant `slot ∈ [0, q)`.  A single
+/// inverse NTT per output poly at the end produces the final `HvcOpening`.
+///
+/// Bit-identical to `Σ scale_opening_any(wᵢ, sigᵢ.opening) (coefficient
+/// domain)` — see commit message / paper appendix for the algebraic
+/// argument (the NTT is R_q-linear).
+fn aggregate_openings_u64(
+    ws: &[Vec<i64>],
+    openings: &[&HvcOpening],
+    rp: &RingParams64,
+) -> HvcOpening {
+    assert_eq!(ws.len(), openings.len(), "ws/openings length mismatch");
+    assert!(!openings.is_empty(), "aggregate_openings: empty input");
+
+    let d = rp.d;
+    let q = rp.q;
+    let ref_open = openings[0];
+
+    // Per-chunk worker: accumulate up to `REDUCE_INTERVAL` contributions, then
+    // reduce mod q so the result is a valid `[0, q)` accumulator.
+    let chunk_size = lazy_reduce_interval(q);
+
+    let acc = ws
+        .par_chunks(chunk_size)
+        .zip(openings.par_chunks(chunk_size))
+        .map(|(w_chunk, opening_chunk)| {
+            let mut local = NttAcc::zero(ref_open, d);
+            let mut w_hat = vec![0u64; d];
+            let mut p_hat = vec![0u64; d];
+            for (w, opening) in w_chunk.iter().zip(opening_chunk.iter()) {
+                // Forward NTT of w_i (once per signer, reused for all opening segments).
+                for (dst, &x) in w_hat.iter_mut().zip(w.iter()) {
+                    *dst = rp.to_mont(rp.reduce_i64(x));
+                }
+                crate::ntt::ntt_forward_u64(&mut w_hat, rp.zetas, q, rp.q_inv);
+                local.mac(&w_hat, opening, rp, &mut p_hat);
+            }
+            local.reduce_mod_q(q);
+            local
+        })
+        .reduce(
+            || NttAcc::zero(ref_open, d),
+            |mut a, b| {
+                a.add_mod_q(&b, q);
+                a
+            },
+        );
+
+    // One inverse NTT per output poly.  Accumulator already in [0, q).
+    acc.finalize_u64(rp)
+}
+
+/// Public NTT-domain opening aggregator.  For the u64 HVC ring (the only
+/// shipped backend) uses `aggregate_openings_u64`; for the u32 ring falls
+/// back to the per-signer reference path (kept compile-checked for future
+/// cells with natively NTT-friendly q < 2^32).
+pub fn aggregate_openings_any(
+    ws: &[Vec<i64>],
+    openings: &[&HvcOpening],
+    profile: &Profile,
+) -> HvcOpening {
+    match &profile.hvc_ring {
+        HvcRing::U64(rp) => aggregate_openings_u64(ws, openings, rp),
+        HvcRing::U32(_) => {
+            // Reference fallback (u32 ring is not exercised by the shipped profile).
+            let mut acc: Option<HvcOpening> = None;
+            for (w, opening) in ws.iter().zip(openings.iter()) {
+                let scaled = scale_opening_any(w, opening, profile);
+                acc = Some(match acc {
+                    None => scaled,
+                    Some(prev) => add_openings(&prev, &scaled),
+                });
+            }
+            acc.expect("aggregate_openings: empty input")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Babai encoding helpers for compressed HVC openings
 // ---------------------------------------------------------------------------
 
@@ -1807,5 +2152,36 @@ mod bds_smoke {
         let enc = babai_encode_label_with_profile(&open.path_labels[0], &hint, DEFAULT);
         let dec = babai_decode_label_with_profile(&enc, &hint, DEFAULT);
         assert_eq!(dec, open.path_labels[0], "babai round-trip drift");
+    }
+
+    #[test]
+    fn aggregate_openings_ntt_matches_reference_path() {
+        let tau = 3usize;
+        let (pp, opks) = setup_harness(tau);
+        let openings: Vec<HvcOpening> = (0..4)
+            .map(|slot| hvc_open(&pp, slot, |t: usize| opks[t].clone()))
+            .collect();
+        let opening_refs: Vec<&HvcOpening> = openings.iter().collect();
+
+        let ws: Vec<Vec<i64>> = (0..openings.len())
+            .map(|signer| {
+                let mut w = vec![0i64; DEFAULT.d];
+                for j in 0..DEFAULT.alpha_w {
+                    let idx = (13 * signer + 29 * j) % DEFAULT.d;
+                    w[idx] = if (signer + j) & 1 == 0 { 1 } else { -1 };
+                }
+                w
+            })
+            .collect();
+
+        let fast = aggregate_openings_any(&ws, &opening_refs, DEFAULT);
+        let reference = ws
+            .iter()
+            .zip(openings.iter())
+            .map(|(w, opening)| scale_opening_any(w, opening, DEFAULT))
+            .reduce(|acc, scaled| add_openings(&acc, &scaled))
+            .expect("nonempty opening set");
+
+        assert!(openings_equal(&fast, &reference));
     }
 }

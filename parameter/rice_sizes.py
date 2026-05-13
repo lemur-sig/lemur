@@ -42,10 +42,38 @@ def rice_params(sigma: float, max_bound: int) -> tuple[str, int]:
     return ("fixed", dx_fixed)
 
 
+def rice_bits_per_coef(sigma: float, rice_k: int) -> float:
+    """Expected Rice codeword bits per coefficient under X ~ N(0, sigma^2).
+
+    Codeword length:
+      L = k+1                       if  X = 0
+      L = k+2+j  (j >= 0)           if  j*2^k <= |X| < (j+1)*2^k
+    E[L] = k + 2 - P(X=0) + 2 * sum_{j>=1} (1 - Phi(j*2^k/sigma)).
+
+    Tight; the earlier `k + 0.7979*sigma/2^k + 2` substituted
+    E[|X|]/2^k for E[floor(|X|/2^k)] and biased the estimate ~3% high.
+    """
+    sigma = max(float(sigma), 0.0)
+    if sigma == 0.0:
+        return float(rice_k + 1)
+    p_zero = math.erf(0.5 / (sigma * math.sqrt(2)))
+    step = float(1 << rice_k)
+    inv_sqrt2 = 1.0 / math.sqrt(2)
+    e_floor = 0.0
+    j = 1
+    while True:
+        p = math.erfc(j * step / sigma * inv_sqrt2)
+        e_floor += p
+        if p < 1e-15 and j > 5:
+            break
+        j += 1
+        if j > 10_000:
+            break
+    return rice_k + 2.0 - p_zero + e_floor
+
+
 def rice_poly_bytes_est(d: int, sigma: float, rice_k: int) -> int:
-    mean_hi = 0.7979 * sigma / (1 << rice_k)
-    bits_per_coeff = rice_k + mean_hi + 2.0
-    return math.ceil(d * bits_per_coeff / 8.0)
+    return math.ceil(d * rice_bits_per_coef(sigma, rice_k) / 8.0)
 
 
 def encoded_size(row: dict[str, int | float]) -> int:

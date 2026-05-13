@@ -253,7 +253,7 @@ def cmd_sizes(_args):
         f"  omega={hvc.omega}, kappa={hvc.kappa}, kappa'={hvc.kappa_prime}, "
         f"rho={hvc.rho}, nu={hvc.nu}, eta={hvc.eta}"
     )
-    print(f"  ell={kots.ell}, m={kots.m}, k={kots.k}, n={kots.n}")
+    print(f"  m={kots.m}, k={kots.k}, n={kots.n}")
     print(
         f"  beta_z={kots.beta_z:,}  beta_sigma={kots.beta_sigma:,}  "
         f"beta_agg={hvc.beta_agg:,}"
@@ -362,7 +362,6 @@ def cmd_vectors(args):
             "q_kots":       kots.q,
             "q_hvc":        hvc.q,
             "k":            kots.k,
-            "ell":          kots.ell,
             "m":            kots.m,
             "n":            kots.n,
             "alpha":        kots.alpha,

@@ -752,7 +752,7 @@ mod tests {
     /// that the shipped parameter set drives into the CRT backend:
     ///
     /// * `matmul_structured_a`: `terms = m - n = 9 - 4 = 5`.
-    /// * `mat_mul_h` for sign / verify: `terms = k - ell = 4 - 1 = 3`.
+    /// * `mat_mul_h` for sign / verify: `terms = k - 1 = 4 - 1 = 3`.
     ///
     /// Exercised at `terms = 16` as a comfortable envelope.
     #[test]

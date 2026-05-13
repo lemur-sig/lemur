@@ -132,7 +132,6 @@ pub struct Profile {
 
     // --- KOTS --------------------------------------------------------
     pub k: usize,
-    pub ell: usize,
     pub m: usize,
     pub n: usize,
     /// Gaussian width parameter alpha (paper symbol; appears in
@@ -216,7 +215,7 @@ impl Profile {
                 "profile {:?}: CRT KOTS d must match profile d",
                 self.name
             );
-            let max_terms = 1usize.max(self.m - self.n).max(self.k - self.ell);
+            let max_terms = 1usize.max(self.m - self.n).max(self.k - 1);
             assert!(
                 CrtBackend::new_for_accum(cfg.q, cfg.d, max_terms).is_some(),
                 "profile {:?}: CRT KOTS q={}, d={}, terms={} exceeds capacity",
@@ -303,14 +302,13 @@ pub static D256_K4: Profile = Profile {
     tau: 20,
     n_signers: 1024,
     k: 4,
-    ell: 1,
     m: 9,
     n: 4,
     alpha: 87.0,
     sigma: 34.707_978_394_924_645,
     alpha_h: 60,
-    beta_z: 14_046,
-    beta_sigma: 13_229_351,
+    beta_z: 7_023,
+    beta_sigma: 6_614_676,
     kots_ring: None,
     kots_ring64: None,
     kots_crt: Some(KotsCrtCfg {

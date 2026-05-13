@@ -469,8 +469,8 @@ fn cmd_sizes(n_signers: usize, profile: &'static Profile) {
         profile.omega, profile.kappa, profile.kappa_prime, profile.k, profile.n, profile.eta,
     );
     println!(
-        "  ell={}, m={}, k={}, n={}",
-        profile.ell, profile.m, profile.k, profile.n
+        "  m={}, k={}, n={}",
+        profile.m, profile.k, profile.n
     );
     println!(
         "  beta_z={}  beta_sigma={}",
@@ -578,7 +578,6 @@ fn run_vectors(
             "q_kots": profile.q_kots(),
             "q_hvc": profile.q_hvc(),
             "k": profile.k,
-            "ell": profile.ell,
             "m": profile.m,
             "n": profile.n,
             "alpha": profile.alpha,

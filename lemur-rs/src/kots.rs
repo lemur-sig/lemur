@@ -49,7 +49,7 @@ pub struct KotsSk(pub Vec<i64>);
 #[derive(Clone)]
 pub struct KotsPk(pub Vec<i64>);
 
-/// KOTS signature Z: shape (ell x m x d), flat i64 array.
+/// KOTS signature z: row vector in R^m, shape (m x d), flat i64 array.
 #[derive(Clone)]
 pub struct KotsSig(pub Vec<i64>);
 
@@ -149,48 +149,39 @@ fn matmul_structured_a(x: &[i64], rows: usize, a: &KotsA, profile: &Profile) -> 
     t
 }
 
-/// Multiply the structured KOTS hash matrix `H = [I_ell | H']` by `B`.
+/// Multiply the structured KOTS hash row `h = [1 | h']` by `B`.
 ///
-/// This is the only CRT matrix multiply needed on the sign / verify paths.
-/// The identity block contributes `B[i, j]` directly in coefficient form,
-/// so we only forward-NTT and multiply the hashed columns `ell..k`.
-fn mat_mul_h(
-    h: &[i64],
-    b: &[i64],
-    ell: usize,
-    k: usize,
-    t: usize,
-    backend: &CrtBackend,
-) -> Vec<i64> {
+/// `h` is the row vector `[1, h'_1, ..., h'_{k-1}]` of `k` polynomials.
+/// The identity entry `h[0] = 1` contributes `B[0, j]` directly in
+/// coefficient form, so we only forward-NTT and multiply the hashed
+/// columns `1..k`.
+fn mat_mul_h(h: &[i64], b: &[i64], k: usize, t: usize, backend: &CrtBackend) -> Vec<i64> {
     let d = backend.d();
     let q = backend.q() as i64;
-    let hashed_cols = k - ell;
+    let hashed_cols = k - 1;
 
-    debug_assert_eq!(h.len(), ell * k * d);
+    debug_assert_eq!(h.len(), k * d);
     debug_assert_eq!(b.len(), k * t * d);
 
-    // Pre-NTT only H' and the matching lower rows of B.  The identity
-    // columns H[i,i] = 1 are copied directly into the coefficient-domain
-    // output below.
-    let mut h_p1 = vec![0u64; ell * hashed_cols * d];
-    let mut h_p2 = vec![0u64; ell * hashed_cols * d];
-    for i in 0..ell {
-        for l in 0..hashed_cols {
-            let h_col = ell + l;
-            let src_off = (i * k + h_col) * d;
-            let dst_off = (i * hashed_cols + l) * d;
-            backend.forward_into_i64(
-                &h[src_off..src_off + d],
-                &mut h_p1[dst_off..dst_off + d],
-                &mut h_p2[dst_off..dst_off + d],
-            );
-        }
+    // Pre-NTT only h' and the matching lower rows of B.  h[0] = 1 is the
+    // identity and is copied straight into the coefficient-domain output.
+    let mut h_p1 = vec![0u64; hashed_cols * d];
+    let mut h_p2 = vec![0u64; hashed_cols * d];
+    for l in 0..hashed_cols {
+        let h_col = 1 + l;
+        let src_off = h_col * d;
+        let dst_off = l * d;
+        backend.forward_into_i64(
+            &h[src_off..src_off + d],
+            &mut h_p1[dst_off..dst_off + d],
+            &mut h_p2[dst_off..dst_off + d],
+        );
     }
 
     let mut b_p1 = vec![0u64; hashed_cols * t * d];
     let mut b_p2 = vec![0u64; hashed_cols * t * d];
     for l in 0..hashed_cols {
-        let b_row = ell + l;
+        let b_row = 1 + l;
         for j in 0..t {
             let src_off = (b_row * t + j) * d;
             let dst_off = (l * t + j) * d;
@@ -202,63 +193,55 @@ fn mat_mul_h(
         }
     }
 
-    let mut out = vec![0i64; ell * t * d];
+    let mut out = vec![0i64; t * d];
     let mut acc_p1 = vec![0u64; d];
     let mut acc_p2 = vec![0u64; d];
-    for i in 0..ell {
-        for j in 0..t {
-            acc_p1.iter_mut().for_each(|v| *v = 0);
-            acc_p2.iter_mut().for_each(|v| *v = 0);
-            for l in 0..hashed_cols {
-                let h_off = (i * hashed_cols + l) * d;
-                let b_off = (l * t + j) * d;
-                backend.accum_mul_slices(
-                    &mut acc_p1,
-                    &mut acc_p2,
-                    &h_p1[h_off..h_off + d],
-                    &h_p2[h_off..h_off + d],
-                    &b_p1[b_off..b_off + d],
-                    &b_p2[b_off..b_off + d],
-                );
-            }
+    for j in 0..t {
+        acc_p1.iter_mut().for_each(|v| *v = 0);
+        acc_p2.iter_mut().for_each(|v| *v = 0);
+        for l in 0..hashed_cols {
+            let h_off = l * d;
+            let b_off = (l * t + j) * d;
+            backend.accum_mul_slices(
+                &mut acc_p1,
+                &mut acc_p2,
+                &h_p1[h_off..h_off + d],
+                &h_p2[h_off..h_off + d],
+                &b_p1[b_off..b_off + d],
+                &b_p2[b_off..b_off + d],
+            );
+        }
 
-            let out_off = (i * t + j) * d;
-            let identity_off = (i * t + j) * d;
-            if hashed_cols == 0 {
-                for l in 0..d {
-                    out[out_off + l] = b[identity_off + l].rem_euclid(q);
-                }
-                continue;
-            }
-
-            let prod = backend.finalize_accum_slices(&mut acc_p1, &mut acc_p2);
+        let out_off = j * d;
+        let identity_off = j * d;
+        if hashed_cols == 0 {
             for l in 0..d {
-                out[out_off + l] = (b[identity_off + l] + prod[l] as i64).rem_euclid(q);
+                out[out_off + l] = b[identity_off + l].rem_euclid(q);
             }
+            continue;
+        }
+
+        let prod = backend.finalize_accum_slices(&mut acc_p1, &mut acc_p2);
+        for l in 0..d {
+            out[out_off + l] = (b[identity_off + l] + prod[l] as i64).rem_euclid(q);
         }
     }
     out
 }
 
-/// Build H = [I_ell | H'] in R^{ell x k}, stride = profile.d.
+/// Build `h = [1 | h']` in `R^k`, stride = profile.d.
 fn build_h(mu: &[u8], profile: &Profile) -> Vec<i64> {
-    let ell = profile.ell;
     let k = profile.k;
     let alpha_h = profile.alpha_h;
     let d = profile.d;
 
-    let mut h = vec![0i64; ell * k * d];
-    for i in 0..ell {
-        h[(i * k + i) * d] = 1;
-    }
-    for i in 0..ell {
-        for j in 0..(k - ell) {
-            let index = (i * (k - ell) + j) as u32;
-            let mut xof = kots_hash_xof(mu, index);
-            let poly = xof_ternary_poly(&mut xof as &mut dyn XofReader, alpha_h, d);
-            let col = ell + j;
-            h[(i * k + col) * d..(i * k + col + 1) * d].copy_from_slice(&poly);
-        }
+    let mut h = vec![0i64; k * d];
+    h[0] = 1;
+    for j in 0..(k - 1) {
+        let mut xof = kots_hash_xof(mu, j as u32);
+        let poly = xof_ternary_poly(&mut xof as &mut dyn XofReader, alpha_h, d);
+        let col = 1 + j;
+        h[col * d..(col + 1) * d].copy_from_slice(&poly);
     }
     h
 }
@@ -364,19 +347,18 @@ pub fn kots_pk_from_seed(a: &KotsA, seed: &[u8], profile: &'static Profile) -> K
     KotsPk(t)
 }
 
-/// KOTS Sign: Z = H * S with signed lift.
+/// KOTS Sign: z = h * S with signed lift.  z is a row vector in R^m.
 pub fn kots_sign(sk: &KotsSk, mu: &[u8], profile: &'static Profile) -> KotsSig {
     let cfg = profile.kots_crt().expect("CRT KOTS profile");
-    let ell = profile.ell;
     let k = profile.k;
     let m = profile.m;
-    // H = [I_ell | H']; only the hashed `k - ell` columns require ring
-    // products.  Size the backend for that lazy accumulation depth.
-    let backend = cfg.backend_for_accum(k - ell);
+    // h = [1 | h']; only the hashed k-1 columns require ring products.
+    // Size the backend for that lazy accumulation depth.
+    let backend = cfg.backend_for_accum(k - 1);
     let q = cfg.q as i64;
     let h = build_h(mu, profile);
 
-    let z_unsigned = mat_mul_h(&h, &sk.0, ell, k, m, &backend);
+    let z_unsigned = mat_mul_h(&h, &sk.0, k, m, &backend);
     let half = q / 2;
     let z: Vec<i64> = z_unsigned
         .into_iter()
@@ -385,7 +367,7 @@ pub fn kots_sign(sk: &KotsSk, mu: &[u8], profile: &'static Profile) -> KotsSig {
     KotsSig(z)
 }
 
-/// KOTS Verify: ||Z||_inf <= beta AND Z*A == H*T (mod q').
+/// KOTS Verify: ||z||_inf <= beta AND z*A == h*T (mod q').
 pub fn kots_vrfy(
     a: &KotsA,
     pk: &KotsPk,
@@ -398,14 +380,13 @@ pub fn kots_vrfy(
         return Err(LemurError::VerifyFailed);
     }
     let cfg = profile.kots_crt().expect("CRT KOTS profile");
-    let ell = profile.ell;
     let k = profile.k;
     let n = profile.n;
-    let backend = cfg.backend_for_accum(k - ell);
+    let backend = cfg.backend_for_accum(k - 1);
 
     let h = build_h(mu, profile);
-    let za = matmul_structured_a(&sig.0, ell, a, profile);
-    let ht = mat_mul_h(&h, &pk.0, ell, k, n, &backend);
+    let za = matmul_structured_a(&sig.0, 1, a, profile);
+    let ht = mat_mul_h(&h, &pk.0, k, n, &backend);
     if za == ht {
         Ok(())
     } else {
@@ -478,7 +459,7 @@ mod tests {
         assert_eq!(pk.0.len(), profile.k * profile.n * profile.d);
 
         let sig = kots_sign(&sk, mu, profile);
-        assert_eq!(sig.0.len(), profile.ell * profile.m * profile.d);
+        assert_eq!(sig.0.len(), profile.m * profile.d);
         kots_ivrfy(&a, &pk, mu, &sig, profile).expect("ivrfy");
         kots_svrfy(&a, &pk, mu, &sig, profile).expect("svrfy");
         kots_wvrfy(&a, &pk, mu, &sig, profile).expect("wvrfy");

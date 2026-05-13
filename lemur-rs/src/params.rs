@@ -6,9 +6,11 @@
 
 /// CDT precision for the discrete Gaussian sampler.
 ///
-/// 32 bits byte-aligned = 31-bit CDF comparison + 1 sign bit (LSB),
-/// matching the `prec_re = 31` bound from the discrete-Gaussian
-/// Rényi-divergence analysis at λ = 128 for d ∈ {128, 256}.
+/// 32 bits byte-aligned = 31-bit CDF comparison + 1 sign bit (LSB).
+/// For the shipped `D256_K4` profile,
+/// `parameter/Lemur-DGS-Prec_TailCut.py` computes `prec_re = 28`, so
+/// the implementation keeps a 3-bit comparison margin from the
+/// discrete-Gaussian Rényi-divergence analysis at λ = 128.
 pub const GAUSS_CDT_BITS: usize = 32;
 
 /// Gaussian sampler precision in bytes.

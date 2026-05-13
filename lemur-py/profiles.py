@@ -47,7 +47,6 @@ class LemurProfile:
     n_signers: int
     # KOTS
     k: int
-    ell: int
     m: int
     n: int
     q_prime: int
@@ -69,7 +68,7 @@ class LemurProfile:
     tailcut: int = 5
 
 
-def _profile(*, name, d, tau, n_signers, k, ell, m, n, q_prime,
+def _profile(*, name, d, tau, n_signers, k, m, n, q_prime,
              alpha, alpha_h, beta_z, beta_sigma, q, omega, eta, beta_agg,
              alpha_w, gamma=10):
     """Build a LemurProfile with sigma = alpha / sqrt(2*pi).
@@ -89,7 +88,7 @@ def _profile(*, name, d, tau, n_signers, k, ell, m, n, q_prime,
     return LemurProfile(
         name=name,
         d=d, tau=tau, n_signers=n_signers,
-        k=k, ell=ell, m=m, n=n, q_prime=q_prime,
+        k=k, m=m, n=n, q_prime=q_prime,
         alpha=float(alpha), sigma=float(alpha) / sqrt(2.0 * pi),
         alpha_h=alpha_h, beta_z=beta_z, beta_sigma=beta_sigma,
         q=q, omega=omega, eta=eta, beta_agg=beta_agg,
@@ -106,8 +105,8 @@ def _profile(*, name, d, tau, n_signers, k, ell, m, n, q_prime,
 D256_K4 = _profile(
     name="d256_k4",
     d=256, tau=20, n_signers=1024,
-    k=4, ell=1, m=9, n=4, q_prime=3_469_416_721,
-    alpha=87, alpha_h=60, beta_z=14_046, beta_sigma=13_229_351,
+    k=4, m=9, n=4, q_prime=3_469_416_721,
+    alpha=87, alpha_h=60, beta_z=7_023, beta_sigma=6_614_676,
     q=9_007_199_254_746_113, omega=2, eta=776, beta_agg=919_945,
     alpha_w=23,
 )

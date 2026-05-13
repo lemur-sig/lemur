@@ -36,6 +36,40 @@ fn poly_bytes(d: usize, dx: usize) -> usize {
     (d * dx).div_ceil(8)
 }
 
+/// Expected Rice codeword bits per coefficient under a continuous-Gaussian
+/// model `X ~ N(0, sigma^2)`:
+///   L = k+1                       if X = 0
+///   L = k+2+j  (j >= 0)            if j*2^k <= |X| < (j+1)*2^k
+/// so  E[L] = k + 2 - P(X=0) + sum_{j>=1} 2*(1 - Phi(j*2^k/sigma))
+///         = k + 2 - P(X=0) + sum_{j>=1} erfc(j*2^k/(sigma*sqrt 2)).
+///
+/// Used only by `sizes()` to print a documentation estimate; the on-wire
+/// `rice_k` selection in `compute_agg_encoding` still uses the older,
+/// looser cost model (kept stable for byte-level interop).
+fn rice_bits_per_coef(sigma: f64, rice_k: usize) -> f64 {
+    let sigma = sigma.max(0.0);
+    if sigma == 0.0 {
+        return (rice_k + 1) as f64;
+    }
+    let p_zero = libm::erf(0.5 / (sigma * std::f64::consts::SQRT_2));
+    let step = (1u64 << rice_k) as f64;
+    let inv = 1.0 / (sigma * std::f64::consts::SQRT_2);
+    let mut e_floor = 0.0;
+    let mut j = 1usize;
+    loop {
+        let p = libm::erfc(j as f64 * step * inv);
+        e_floor += p;
+        if p < 1e-15 && j > 5 {
+            break;
+        }
+        j += 1;
+        if j > 10_000 {
+            break;
+        }
+    }
+    rice_k as f64 + 2.0 - p_zero + e_floor
+}
+
 // ---------------------------------------------------------------------------
 // Fixed-width bit-packing
 // ---------------------------------------------------------------------------
@@ -345,14 +379,13 @@ pub fn compute_agg_encoding(pp: &LemurPp, n_signers: usize) -> AggEncoding {
     let sigma = profile.sigma;
     let alpha_h = profile.alpha_h as f64;
     let k = profile.k as f64;
-    let ell = profile.ell as f64;
-    let sigma_z_ind = sigma * (1.0 + (k - ell) * alpha_h).sqrt();
+    let sigma_z_ind = sigma * (1.0 + (k - 1.0) * alpha_h).sqrt();
     let sigma_zagg = sigma_z_ind * (n_signers as f64 * alpha_w).sqrt();
 
     let sigma_babai = sigma_label / (2.0 * eta);
 
     // Z_agg: N-dependent fixed-width
-    let n_zagg_coeffs = (profile.ell * profile.m * profile.d) as f64;
+    let n_zagg_coeffs = (profile.m * profile.d) as f64;
     let c_zagg = (2.0 * (2.0 * n_zagg_coeffs * 256.0).ln()).sqrt();
     let zagg_bound_raw = (c_zagg * sigma_zagg).ceil() as i64;
     let zagg_bound = zagg_bound_raw.min(profile.beta_sigma);
@@ -852,7 +885,7 @@ pub fn sig_encode(sig: &LemurSig, hvc_pp: &HvcPp) -> Vec<u8> {
     let off_z = profile.beta_z;
     let dx_d = bits_dig(profile);
     let off_d = profile.eta;
-    let n_z = profile.ell * profile.m;
+    let n_z = profile.m;
     let n_label = profile.omega * profile.kappa;
     let n_u = profile.k * profile.n * profile.kappa_prime;
 
@@ -874,7 +907,7 @@ pub fn sig_decode(data: &[u8], pp: &LemurPp, t: usize) -> Result<LemurSig, Lemur
     let off_z = profile.beta_z;
     let dx_d = bits_dig(profile);
     let off_d = profile.eta;
-    let n_z = profile.ell * profile.m;
+    let n_z = profile.m;
     let n_label = profile.omega * profile.kappa;
     let n_u = profile.k * profile.n * profile.kappa_prime;
     let tau = pp.hvc_pp.tau;
@@ -921,7 +954,7 @@ pub fn sig_bytes_with_profile(tau: usize, profile: &Profile) -> usize {
     let pb_dig = poly_bytes(profile.d, dx_d);
     let n_label = profile.omega * profile.kappa;
     let n_u = profile.k * profile.n * profile.kappa_prime;
-    profile.ell * profile.m * pb_z + tau * n_label * pb_dig + n_u * pb_dig
+    profile.m * pb_z + tau * n_label * pb_dig + n_u * pb_dig
 }
 
 
@@ -939,7 +972,7 @@ pub fn agg_sig_encode(sigma_agg: &LemurAggSig, n_signers: usize, pp: &LemurPp) -
     let mut out = vec![sigma_agg.attempt as u8];
 
     // Z_agg: N-dependent fixed-width
-    let z_polys = flat_to_polys(&sigma_agg.z_agg.0, profile.ell * profile.m, profile.d);
+    let z_polys = flat_to_polys(&sigma_agg.z_agg.0, profile.m, profile.d);
     out.extend(vec_serial(&z_polys, enc.zagg_dx, enc.zagg_bound));
 
     // Babai-encoded path labels
@@ -1011,7 +1044,7 @@ pub fn agg_sig_decode(
     let (z_polys, l) = vec_deserial(
         &data[off..],
         enc.zagg_dx,
-        profile.ell * profile.m,
+        profile.m,
         profile.d,
         enc.zagg_bound,
     )?;
@@ -1135,8 +1168,7 @@ pub fn sizes(pp: &LemurPp, n_signers: usize) -> Vec<(String, usize)> {
     let sigma_babai = sigma_label / (2.0 * eta);
 
     let rice_poly_bytes_est = |sigma: f64, rice_k: usize| -> usize {
-        let mean_hi = 0.7979 * sigma / (1u64 << rice_k) as f64;
-        let bits_per_coeff = rice_k as f64 + mean_hi + 1.0 + 1.0;
+        let bits_per_coeff = rice_bits_per_coef(sigma, rice_k);
         (profile.d as f64 * bits_per_coeff / 8.0).ceil() as usize
     };
 
@@ -1159,7 +1191,7 @@ pub fn sizes(pp: &LemurPp, n_signers: usize) -> Vec<(String, usize)> {
     let sib_total = tau * n_label * pb_agg;
     let u_total = n_u * pb_agg;
 
-    let agg_total = 1 + profile.ell * profile.m * pb_zagg + babai_total + sib_total + u_total;
+    let agg_total = 1 + profile.m * pb_zagg + babai_total + sib_total + u_total;
     let label = match (&enc.babai_mode, &enc.agg_mode) {
         (EncMode::Rice { .. }, _) | (_, EncMode::Rice { .. }) => "~",
         _ => "",
@@ -1200,7 +1232,7 @@ pub fn sizes(pp: &LemurPp, n_signers: usize) -> Vec<(String, usize)> {
         ("sk.state (fresh BDS)".into(), fresh_state_bytes),
         ("pk (HVC commitment)".into(), profile.omega * pb_pk),
         ("individual sig".into(), sig_ind),
-        ("  Z (KOTS sig)".into(), profile.ell * profile.m * pb_z),
+        ("  Z (KOTS sig)".into(), profile.m * pb_z),
         ("  sibling labels".into(), tau * n_label * pb_dig),
         ("  u".into(), n_u * pb_dig),
         (
@@ -1209,7 +1241,7 @@ pub fn sizes(pp: &LemurPp, n_signers: usize) -> Vec<(String, usize)> {
         ),
         (
             format!("  Z_agg ({}b, bound={})", enc.zagg_dx, enc.zagg_bound),
-            1 + profile.ell * profile.m * pb_zagg,
+            1 + profile.m * pb_zagg,
         ),
         (format!("  Babai path ({babai_desc})"), babai_total),
         (format!("  sibling labels ({agg_desc})"), sib_total),

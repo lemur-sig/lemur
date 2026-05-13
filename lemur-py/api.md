@@ -108,7 +108,7 @@ Standalone deterministic samplers.  Each takes an explicit SHAKE XOF handle so
 the caller controls domain separation and seed derivation.  All three use
 **batched XOF reads**: a single `xof.read(N)` per polynomial rather than per
 coefficient.  SHAKE buffers one rate block internally (168 B for SHAKE128,
-136 B for SHAKE256), so batching does not change the Keccak-f permutation
+136 B for SHAKE128), so batching does not change the Keccak-f permutation
 count — it eliminates per-call dispatch / allocation overhead.  Because each
 caller hands in an *ephemeral* XOF seeded per matrix element (counter-mode
 sub-keys; see the setup/keygen XOF construction in `kots.py` and `hvc.py`),
@@ -135,10 +135,11 @@ the paper symbol α**: the Lemur spec's formal Gaussian definition uses α as
 a width parameter (σ = α/√(2π)).  Profiles resolve the convention
 before passing σ here; the sampler itself is agnostic.
 
-`cdt_bits = 32` is the byte-aligned implementation of the **31-bit CDF
-precision bound** from the discrete-Gaussian Rényi-divergence analysis.
-The 32-bit read yields 31 bits of CDF comparison plus one sign bit (LSB),
-matching `prec_re = 31` at λ=128 for the shipped parameter set.
+`cdt_bits = 32` is a byte-aligned implementation choice for the
+discrete-Gaussian Rényi-divergence bound.  The 32-bit read yields 31 bits
+of CDF comparison plus one sign bit (LSB); for the shipped D256_K4 profile,
+`parameter/Lemur-DGS-Prec_TailCut.py` computes `prec_re = 28`, so the
+implementation keeps a 3-bit comparison margin.
 `tailcut = 5·σ` by the same analysis (`tc_re = 5`).
 
 ### Functions
@@ -335,7 +336,7 @@ kots.keygen(A2, seed: bytes) -> tuple[np.ndarray, np.ndarray]
 Returns `(S, T)`:
 - `S ∈ R^{k×m}`, shape `(k, m, d)`, discrete Gaussian with standard
   deviation `sampler.sigma` (defaults to `profile.sigma`).
-  `S[i][j] = xof_gauss(SHAKE256(seed || [i,j] || b'S'))` — one
+  `S[i][j] = xof_gauss(SHAKE128(seed || [i,j] || b'S'))` — one
   counter-mode sub-seed per matrix entry, so the `K·M` samplers are
   independent and trivially parallelisable.
 - `T = S·A mod q'`, shape `(k, n, d)`, using the implicit structured matrix
@@ -345,7 +346,7 @@ Returns `(S, T)`:
 kots.sign(A2, S, mu: bytes) -> np.ndarray   # Z: (ell, m, d)
 ```
 Returns `Z = H·S` computed over Z (signed exact arithmetic via `ring.mul_signed`).
-`H = [I_ell | H']` where `H'[i,j] = xof_ternary(SHAKE256(mu || j || b'H'))`.
+`H = [I_ell | H']` where `H'[i,j] = xof_ternary(SHAKE128(mu || j || b'H'))`.
 
 ```python
 kots.vrfy(A2, T, mu: bytes, Z, beta: int) -> bool
@@ -610,7 +611,7 @@ default to the profile's values (`23, 10`).
 ```python
 LEMUR._slot_seed(master_seed, t) -> bytes   # @staticmethod
 ```
-Per-slot seed: `SHAKE256(master_seed || b'slot' || t.to_bytes(4, 'little')).read(32)`.
+Per-slot seed: `SHAKE128(master_seed || b'slot' || t.to_bytes(4, 'little')).read(32)`.
 
 ```python
 LEMUR.make_stateful_sk(master_seed, bds) -> dict   # @staticmethod
@@ -624,7 +625,7 @@ bytes(master_seed), "bds": bds}`.  The "current slot" is read from
 lemur._hash_to_randomizers(t, m, P, attempt) -> list[np.ndarray]
 ```
 Streams N ternary randomizers `w^i ∈ T_{alpha_w}` from a single
-`SHAKE256(t || len(m) || m || pk_bytes || attempt)` XOF.
+`SHAKE128(t || len(m) || m || pk_bytes || attempt)` XOF.
 
 ```python
 LEMUR._add_openings(d1, d2) -> tuple   # @staticmethod

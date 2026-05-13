@@ -50,7 +50,7 @@ would produce.
 import math
 import secrets
 import numpy as np
-from Crypto.Hash import SHAKE256
+from Crypto.Hash import SHAKE128
 
 from kots import KOTS
 from hvc import HVC
@@ -136,6 +136,36 @@ def vec_deserial(
 def _poly_bytes(d: int, dx: int) -> int:
     """Byte count for a fixed-width polynomial."""
     return (d * dx + 7) // 8
+
+
+def _rice_bits_per_coef(sigma: float, rice_k: int) -> float:
+    """Expected Rice codeword bits per coefficient under a continuous
+    Gaussian X ~ N(0, sigma^2) model on the coefficient.
+
+    Codeword length:
+      L = k+1                       if  X = 0
+      L = k+2+j  (j >= 0)           if  j*2^k <= |X| < (j+1)*2^k
+
+    E[L] = k + 2 - P(X=0) + E[floor(|X|/2^k)]
+         = k + 2 - P(X=0) + 2 * sum_{j>=1} (1 - Phi(j*2^k/sigma)).
+    """
+    sigma = max(float(sigma), 0.0)
+    if sigma == 0.0:
+        return float(rice_k + 1)
+    p_zero = math.erf(0.5 / (sigma * math.sqrt(2)))
+    step = float(1 << rice_k)
+    inv_sqrt2 = 1.0 / math.sqrt(2)
+    e_floor = 0.0
+    j = 1
+    while True:
+        p = math.erfc(j * step / sigma * inv_sqrt2)  # 2 * (1 - Phi(j*2^k/sigma))
+        e_floor += p
+        if p < 1e-15 and j > 5:
+            break
+        j += 1
+        if j > 10_000:
+            break
+    return rice_k + 2.0 - p_zero + e_floor
 
 
 def _fmt(n: int) -> str:
@@ -319,7 +349,7 @@ def compute_agg_encoding(
     # of sqrt(2*pi) and conflating them overestimates the Z bound by
     # ~2.5x, which drives the Rice-vs-fixed choice the wrong way.
     sigma_z_ind = kots.sampler.sigma * math.sqrt(
-        1 + (kots.k - kots.ell) * kots.alpha_h
+        1 + (kots.k - 1) * kots.alpha_h
     )
     # Z_agg: sum of N ternary(alpha_w) * Z^i
     sigma_zagg = sigma_z_ind * math.sqrt(n_signers * alpha_w)
@@ -357,7 +387,7 @@ def compute_agg_encoding(
         return 'fixed', None, max_bound, dx_fixed
 
     # Z_agg: N-dependent fixed-width (small component, simple encoding)
-    n_zagg_coeffs = kots.ell * kots.m * d
+    n_zagg_coeffs = kots.m * d
     c_zagg = math.sqrt(2 * math.log(2 * n_zagg_coeffs * 256))
     zagg_bound = min(int(math.ceil(c_zagg * sigma_zagg)), kots.beta_sigma)
     zagg_dx = max(1, (2 * zagg_bound).bit_length())
@@ -430,7 +460,7 @@ class LemurCodec:
 
     @staticmethod
     def _slot_seed(master_seed: bytes, t: int) -> bytes:
-        return SHAKE256.new(
+        return SHAKE128.new(
             master_seed + b'slot' + t.to_bytes(4, 'little')
         ).read(32)
 
@@ -789,9 +819,9 @@ class LemurCodec:
         kots = self.scheme.kots
         hvc = self.scheme.hvc
         d = kots.d
-        ell, m = kots.ell, kots.m
-        v, l = vec_deserial(data, self.dx_z, ell * m, d, self.off_z)
-        Z = np.array(v, dtype=np.int64).reshape(ell, m, d)
+        m = kots.m
+        v, l = vec_deserial(data, self.dx_z, m, d, self.off_z)
+        Z = np.array(v, dtype=np.int64).reshape(m, d)
         off = l
         n_label = hvc.omega * hvc.kappa
         sibling_labels = []
@@ -825,7 +855,7 @@ class LemurCodec:
         n_label = hvc.omega * hvc.kappa
         n_u = hvc.rho * hvc.nu * hvc.kappa_prime
         return (
-            kots.ell * kots.m * pb_z
+            kots.m * pb_z
             + hvc.tau * n_label * pb_dig
             + n_u * pb_dig
         )
@@ -909,11 +939,11 @@ class LemurCodec:
         off = 1
 
         # Z_agg
-        ell, m = kots.ell, kots.m
+        m = kots.m
         v, l = vec_deserial(
-            data[off:], enc['zagg_dx'], ell * m, d, enc['zagg_bound']
+            data[off:], enc['zagg_dx'], m, d, enc['zagg_bound']
         )
-        Z_agg = np.array(v, dtype=np.int64).reshape(ell, m, d)
+        Z_agg = np.array(v, dtype=np.int64).reshape(m, d)
         off += l
 
         # Babai path labels
@@ -997,7 +1027,7 @@ class LemurCodec:
         kots = self.scheme.kots
         hvc = self.scheme.hvc
         d = kots.d
-        ell, m = kots.ell, kots.m
+        m = kots.m
         tau = hvc.tau
         pb_z = _poly_bytes(d, self.dx_z)
         pb_dig = _poly_bytes(d, self.dx_dig)
@@ -1014,9 +1044,20 @@ class LemurCodec:
         sigma_babai = sigma_label / (2 * eta)
 
         def _rice_poly_bytes(sigma, rice_k):
-            """Expected bytes per polynomial under Rice coding."""
-            mean_hi = 0.7979 * sigma / (1 << rice_k)
-            bits_per_coeff = rice_k + mean_hi + 1 + 1
+            """Expected bytes per polynomial under Rice coding.
+
+            Per-coefficient codeword length under a continuous-Gaussian
+            model on the coefficient:
+              L = k+1                       if  X = 0
+              L = k+2+j  for j >= 0        if  j*2^k <= |X| < (j+1)*2^k
+            so
+              E[L] = k + 2 - P(X=0) + E[floor(|X|/2^k)]
+                   = k + 2 - P(X=0) + sum_{j>=1} 2 * (1 - Phi(j*2^k/sigma)).
+            This is tight; the earlier `k + 0.7979*sigma/2^k + 2`
+            substituted E[|X|]/2^k for E[floor(|X|/2^k)] and biased the
+            estimate ~3% high.
+            """
+            bits_per_coeff = _rice_bits_per_coef(sigma, rice_k)
             return int(math.ceil(d * bits_per_coeff / 8))
 
         if enc['babai_mode'] == 'rice':
@@ -1036,7 +1077,7 @@ class LemurCodec:
         sib_total = tau * n_label * pb_agg
         u_total = n_u * pb_agg
 
-        agg_total = 1 + ell * m * pb_zagg + babai_total + sib_total + u_total
+        agg_total = 1 + m * pb_zagg + babai_total + sib_total + u_total
         label = "~" if enc['babai_mode'] == 'rice' or enc['agg_mode'] == 'rice' else ""
 
         # Fresh BDS state (phi=0) size: header + tau auth labels + tau keep
@@ -1063,12 +1104,12 @@ class LemurCodec:
             "sk.state (fresh BDS)": fresh_state_bytes,
             "pk (HVC commitment)": self.PK_BYTES,
             f"individual sig": self.sig_bytes(),
-            "  Z (KOTS sig)": ell * m * pb_z,
+            "  Z (KOTS sig)": m * pb_z,
             "  sibling labels": tau * n_label * pb_dig,
             "  u": n_u * pb_dig,
             f"aggregated sig (N={n_signers}, {label}{_fmt(agg_total)})": agg_total,
             f"  Z_agg ({enc['zagg_dx']}b, bound={enc['zagg_bound']})":
-                1 + ell * m * pb_zagg,
+                1 + m * pb_zagg,
             f"  Babai path ({babai_desc})": babai_total,
             f"  sibling labels ({agg_desc})": sib_total,
             f"  u ({agg_desc})": u_total,

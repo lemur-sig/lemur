@@ -21,7 +21,7 @@
 use std::time::{Duration, Instant};
 
 use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::Shake256;
+use sha3::Shake128;
 
 use lemur_rs::hvc::{
     hvc_mat_vec_prentt_pair, hvc_setup_with_profile_and_tau, internal_label_with_profile_any,
@@ -74,7 +74,7 @@ fn section(title: &str) {
 }
 
 fn make_xof(seed: &[u8], tag: &[u8]) -> impl XofReader {
-    let mut h = Shake256::default();
+    let mut h = Shake128::default();
     h.update(seed);
     h.update(tag);
     h.finalize_xof()
@@ -109,7 +109,7 @@ fn main() {
     // 1. XOF primitives — split to see where SHAKE cost actually lives.
     //
     // Separates:
-    //   - Shake256::default()                 — pure state zero / init
+    //   - Shake128::default()                 — pure state zero / init
     //   - default() + update(seed)            — + absorb (no permutation)
     //   - default() + update + finalize_xof() — + 1 Keccak-f permutation
     //   - …_xof() + read(n)                   — + n/136 more permutations
@@ -118,15 +118,15 @@ fn main() {
     let xof_reps: usize = 200_000;
 
     row(
-        "Shake256::default() only (no absorb, no finalize)",
+        "Shake128::default() only (no absorb, no finalize)",
         xof_reps,
         || {
-            let h = Shake256::default();
+            let h = Shake128::default();
             std::hint::black_box(h);
         },
     );
     row("default() + update(seed[32])", xof_reps, || {
-        let mut h = Shake256::default();
+        let mut h = Shake128::default();
         h.update(&[7u8; 32]);
         std::hint::black_box(h);
     });
@@ -134,7 +134,7 @@ fn main() {
         "default() + update(seed[32]) + finalize_xof()  (1 perm)",
         xof_reps,
         || {
-            let mut h = Shake256::default();
+            let mut h = Shake128::default();
             h.update(&[7u8; 32]);
             let x = h.finalize_xof();
             std::hint::black_box(x);
@@ -285,7 +285,6 @@ fn main() {
     let k = profile.k;
     let m = profile.m;
     let _n = profile.n;
-    let _ = profile.k - profile.ell;
     let mat_reps: usize = 5_000;
 
     // HVC fused pair multiply: A0·left + A1·right in one accumulator.
@@ -376,8 +375,8 @@ fn main() {
         k * m
     );
 
-    // One KOTS sign = build_h (one ternary per (k-ell)*ell poly) + Z = H*S
-    // (ell*m poly muls through mul_signed).
+    // One KOTS sign = build_h ((k-1) ternary polys) + z = h*S
+    // (m poly muls through mul_signed).
     let sk_for_sign = kots_keygen(&kots_a, &[0x88u8; 32], profile).0;
     let msg: &[u8] = b"breakdown";
     let kots_sign_reps: usize = 5_000;
@@ -386,9 +385,9 @@ fn main() {
         std::hint::black_box(z);
     });
     println!(
-        "    attribution model:  {} ternary_poly (H) + {} poly_mul_signed (Z = H*S)",
-        profile.ell * (k - profile.ell),
-        profile.ell * m * k,
+        "    attribution model:  {} ternary_poly (h) + {} poly_mul_signed (z = h*S)",
+        k - 1,
+        m * k,
     );
 
     // ------------------------------------------------------------------

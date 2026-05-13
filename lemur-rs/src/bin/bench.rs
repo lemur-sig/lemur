@@ -24,7 +24,7 @@ use lemur_rs::sample::{
     xof_ternary_poly, GaussCtx,
 };
 use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::Shake256;
+use sha3::Shake128;
 
 /// Const-generic version of `sample_one_gauss_ctx`: the byte width is a
 /// compile-time constant so the compiler constant-folds the slice bound
@@ -146,7 +146,6 @@ fn aggregate_verified_only(
     let profile = pp.profile;
     let n = pks.len();
     let pks_bytes = concat_pk_bytes(pks);
-    let ell = profile.ell;
     let m = profile.m;
     let gamma = profile.gamma;
     let d = profile.d;
@@ -161,8 +160,8 @@ fn aggregate_verified_only(
             let backend = cfg.backend();
             sigs.iter()
                 .zip(ws.iter())
-                .map(|(sig, w)| scale_mat_crt(w, &sig.z.0, ell, m, &backend))
-                .fold(vec![0i64; ell * m * d], |mut acc, scaled| {
+                .map(|(sig, w)| scale_mat_crt(w, &sig.z.0, 1, m, &backend))
+                .fold(vec![0i64; m * d], |mut acc, scaled| {
                     for (a, b) in acc.iter_mut().zip(scaled.iter()) {
                         *a += *b;
                     }
@@ -171,8 +170,8 @@ fn aggregate_verified_only(
         } else if let Some(kots_rp64) = profile.kots_ring64.as_ref() {
             sigs.iter()
                 .zip(ws.iter())
-                .map(|(sig, w)| lemur_rs::poly::scale_mat_u64(w, &sig.z.0, ell, m, kots_rp64))
-                .fold(vec![0i64; ell * m * d], |mut acc, scaled| {
+                .map(|(sig, w)| lemur_rs::poly::scale_mat_u64(w, &sig.z.0, 1, m, kots_rp64))
+                .fold(vec![0i64; m * d], |mut acc, scaled| {
                     for (a, b) in acc.iter_mut().zip(scaled.iter()) {
                         *a += *b;
                     }
@@ -182,8 +181,8 @@ fn aggregate_verified_only(
             let kots_rp = profile.kots_ring_u32();
             sigs.iter()
                 .zip(ws.iter())
-                .map(|(sig, w)| lemur_rs::poly::scale_mat(w, &sig.z.0, ell, m, kots_rp))
-                .fold(vec![0i64; ell * m * d], |mut acc, scaled| {
+                .map(|(sig, w)| lemur_rs::poly::scale_mat(w, &sig.z.0, 1, m, kots_rp))
+                .fold(vec![0i64; m * d], |mut acc, scaled| {
                     for (a, b) in acc.iter_mut().zip(scaled.iter()) {
                         *a += *b;
                     }
@@ -295,7 +294,7 @@ fn main() {
         // keygen overhead.  Measures the sampler in isolation.
         let poly_reps: u32 = 200_000;
         let make_xof = || {
-            let mut h = Shake256::default();
+            let mut h = Shake128::default();
             h.update(&exp_seed);
             h.update(b"sampler-microbench");
             h.finalize_xof()

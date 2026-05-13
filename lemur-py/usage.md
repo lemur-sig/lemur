@@ -144,8 +144,8 @@ that tree depth.
 | `*.pk` | ~3.4 KB |
 | `*.sk` | 32 B |
 | `*.state` | ~134 KB |
-| `*.sig` | ~89.5 KB |
-| `agg.sig` | ~201 KB |
+| `*.sig` | ~89.2 KB |
+| `agg.sig` | ~195 KB |
 
 `sig_decode` requires `pp` and the slot index so path labels can be
 reconstructed.  `agg_sig_decode` also requires the signer count, because the

@@ -1,15 +1,15 @@
 """
 KOTS: Key-Homomorphic One-Time Signature.
 
-All randomness is derived from SHAKE XOFs:
+All randomness is derived from SHAKE128 XOFs:
   - Public matrix A has the structured form A = [I; A2] and only A2 is
     expanded from SHAKE128(seed || [i,j] || b'A').
-  - Secret keys are sampled per-entry from SHAKE256(seed || [i,j] || b'S').
-  - Message hash H(mu) uses SHAKE256(mu || index || b'H').
+  - Secret keys are sampled per-entry from SHAKE128(seed || [i,j] || b'S').
+  - Message hash H(mu) uses SHAKE128(mu || index || b'H').
 """
 
 import numpy as np
-from Crypto.Hash import SHAKE128, SHAKE256
+from Crypto.Hash import SHAKE128
 
 from profiles import LemurProfile, DEFAULT
 from ring import Ring
@@ -31,7 +31,7 @@ class KOTS:
     """
 
     def __init__(self, profile: LemurProfile | None = None, *,
-                 d=None, q=None, k=None, ell=None, m=None, n=None,
+                 d=None, q=None, k=None, m=None, n=None,
                  alpha=None, alpha_h=None, beta_z=None, beta_sigma=None,
                  lam=128, sigma: float | None = None,
         sampler: GaussianSampler | None = None):
@@ -41,7 +41,6 @@ class KOTS:
         self.d          = d          if d          is not None else profile.d
         self.q          = q          if q          is not None else profile.q_prime
         self.k          = k          if k          is not None else profile.k
-        self.ell        = ell        if ell        is not None else profile.ell
         self.m          = m          if m          is not None else profile.m
         self.n          = n          if n          is not None else profile.n
         self.alpha      = alpha      if alpha      is not None else profile.alpha
@@ -84,19 +83,17 @@ class KOTS:
     # -----------------------------------------------------------------------
 
     def _hash_to_ternary(self, mu, index=0):
-        xof = SHAKE256.new(mu + index.to_bytes(4, 'little') + b'H')
+        xof = SHAKE128.new(mu + index.to_bytes(4, 'little') + b'H')
         return xof_ternary_poly(xof, self.alpha_h, self.d)
 
-    def _build_H(self, mu):
-        """Construct H = [I_ell | H'] in R^{ell x k}.  Returns shape (ell, k, d)."""
-        k, ell, d = self.k, self.ell, self.d
-        H = np.zeros((ell, k, d), dtype=np.int64)
-        for i in range(ell):
-            H[i, i, 0] = 1
-        for i in range(ell):
-            for j in range(k - ell):
-                H[i, ell + j] = self._hash_to_ternary(mu, index=i * (k - ell) + j)
-        return H
+    def _build_h(self, mu):
+        """Construct h = [1 | h'] in R^k.  Returns shape (k, d)."""
+        k, d = self.k, self.d
+        h = np.zeros((k, d), dtype=np.int64)
+        h[0, 0] = 1
+        for j in range(k - 1):
+            h[1 + j] = self._hash_to_ternary(mu, index=j)
+        return h
 
     # -----------------------------------------------------------------------
     # KOTS algorithms
@@ -126,39 +123,39 @@ class KOTS:
     def keygen(self, A2, seed):
         """KGen(A2, seed) -> (S, T).
 
-        S[i][j] from SHAKE256(seed || [i,j] || b'S'), T = S * A mod q where
+        S[i][j] from SHAKE128(seed || [i,j] || b'S'), T = S * A mod q where
         A is the implicit structured matrix [I; A2].
         """
         S = np.zeros((self.k, self.m, self.d), dtype=np.int64)
         for i in range(self.k):
             for j in range(self.m):
-                xof = SHAKE256.new(seed + bytes([i, j]) + b'S')
+                xof = SHAKE128.new(seed + bytes([i, j]) + b'S')
                 S[i, j] = xof_gauss_poly(xof, self.cdt, self.sampler.cdt_bits, self.d)
         T = self._matmul_with_A(S, A2)
         return S, T
 
     def sign(self, A2, S, mu):
-        """Sign(A2, S, mu) -> Z = H * S in R^{ell x m}.
+        """Sign(A2, S, mu) -> z = h * S in R^m, returned shape (m, d).
 
-        Each Z[i,j] = sum_l H[i,l] * S[l,j] (over Z, exact signed arithmetic).
+        z[j] = sum_l h[l] * S[l, j] over Z (exact signed arithmetic).
         The coefficient bound k * alpha_h * max|S| << q/2 so mul_signed is valid.
         """
-        H = self._build_H(mu)
-        Z = np.zeros((self.ell, self.m, self.d), dtype=np.int64)
-        for i in range(self.ell):
-            for j in range(self.m):
-                for l in range(self.k):
-                    Z[i, j] = Z[i, j] + self.ring.mul_signed(H[i, l], S[l, j])
-        return Z
+        h = self._build_h(mu)
+        z = np.zeros((self.m, self.d), dtype=np.int64)
+        for j in range(self.m):
+            for l in range(self.k):
+                z[j] = z[j] + self.ring.mul_signed(h[l], S[l, j])
+        return z
 
-    def vrfy(self, A2, T, mu, Z, beta):
-        """Vrfy: return True iff ||Z||_inf <= beta and Z*A == H*T (mod q)."""
-        if self._inf_norm(Z) > beta:
+    def vrfy(self, A2, T, mu, z, beta):
+        """Vrfy: return True iff ||z||_inf <= beta and z*A == h*T (mod q)."""
+        if self._inf_norm(z) > beta:
             return False
-        H  = self._build_H(mu)
-        ZA = self._matmul_with_A(Z, A2)
-        HT = self.ring.mat_mul(H, T)
-        return bool(np.all(ZA == HT))
+        h  = self._build_h(mu)
+        # Treat z as a 1-row matrix for the structured-A multiply.
+        zA = self._matmul_with_A(z[np.newaxis, :, :], A2)[0]
+        hT = self.ring.mat_mul(h[np.newaxis, :, :], T)[0]
+        return bool(np.all(zA == hT))
 
     def ivrfy(self, A2, T, mu, Z):
         return self.vrfy(A2, T, mu, Z, self.beta_z)
@@ -180,8 +177,7 @@ inf_norm = KOTS._inf_norm
 
 if __name__ == "__main__":
     kots = KOTS()
-    print(f"KOTS: d={kots.d}, q={kots.q}, k={kots.k}, ell={kots.ell}, "
-          f"m={kots.m}, n={kots.n}")
+    print(f"KOTS: d={kots.d}, q={kots.q}, k={kots.k}, m={kots.m}, n={kots.n}")
     print(f"  alpha={kots.alpha}, alpha_h={kots.alpha_h}, "
           f"beta_z={kots.beta_z}, beta_sigma={kots.beta_sigma}")
     print(f"  logq={kots.logq}, bits_z={kots.bits_z}, bits_zagg={kots.bits_zagg}")
