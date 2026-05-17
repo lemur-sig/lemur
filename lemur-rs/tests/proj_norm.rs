@@ -6,10 +6,6 @@
 //! and made the threshold vacuous in sVrfy/wVrfy where q*beta/(2*eta) >> q/2.
 //!
 //! Mirrors lemur-py/test_proj_norm.py.
-//!
-//! Also covers an i64-overflow check: wVrfy's threshold q*2*beta_agg/(2*eta)
-//! is ~2^63.2 — the i128 type is mandatory for the unreduced projection
-//! arithmetic used by the bound check.
 
 use lemur_rs::hvc::{
     proj_label_with_profile, proj_label_zz_with_profile,
@@ -55,12 +51,22 @@ fn proj_label_zz_matches_centered_modq_on_arbitrary_label() {
     assert_eq!(proj_q.len(), omega * d);
     assert_eq!(proj_zz.len(), omega * d);
 
+    let half_q = (q as i128 - 1) / 2;
     for i in 0..(omega * d) {
         let centered = center(proj_q[i], q) as i128;
+        // Congruence mod q always holds.
         assert_eq!(
-            centered, proj_zz[i],
-            "centered mod q must equal ZZ-proj at i={i}"
+            (proj_zz[i] - centered).rem_euclid(q as i128),
+            0,
+            "centered mod q must be congruent to ZZ-proj at i={i}"
         );
+        // Equality holds whenever proj_zz lands inside [-(q-1)/2, (q-1)/2].
+        if proj_zz[i].abs() <= half_q {
+            assert_eq!(
+                centered, proj_zz[i],
+                "centered must equal ZZ-proj in the central band at i={i}"
+            );
+        }
     }
 }
 
@@ -104,30 +110,6 @@ fn proj_label_zz_exceeds_q_over_2_for_max_eta_digits() {
     let threshold_ivrfy = (q as i128 * eta as i128) / (2 * eta) as i128;
     assert!((max_centered as i128) <= threshold_ivrfy); // old code: ACCEPT
     assert!(max_zz > threshold_ivrfy); // new code: REJECT (paper's intent)
-}
-
-#[test]
-fn wvrfy_threshold_overflows_i64() {
-    // wVrfy uses beta = 2*beta_agg.  The threshold q*beta/(2*eta) and the
-    // numerator q*beta must fit in the arithmetic type.  Demonstrates why
-    // the projection helper must be i128, not i64.
-    let profile: &'static Profile = &D256_K4;
-    let q = profile.q_hvc() as i128;
-    let eta = profile.eta as i128;
-    let tau: usize = 20; // shipped depth
-    let beta_agg = lemur_rs::hvc::compute_beta_agg_with_profile(tau, profile) as i128;
-
-    let threshold = q * (2 * beta_agg) / (2 * eta);
-    let numerator = q * (2 * beta_agg);
-
-    assert!(
-        threshold > i64::MAX as i128,
-        "wVrfy threshold {threshold} fits in i64 — i128 is unneeded?"
-    );
-    assert!(
-        numerator > i64::MAX as i128,
-        "q * 2*beta_agg {numerator} fits in i64 — i128 is unneeded?"
-    );
 }
 
 #[test]

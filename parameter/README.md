@@ -6,9 +6,8 @@ implementation parameters.  The artifact uses one fixed parameter family:
 ```text
 d = 256
 k = 4
-ell = 1
 secpar = 128
-epsilon = 2^-15
+epsilon_hom = 2^-15
 RHF = 1.0045
 ```
 
@@ -54,7 +53,7 @@ cd parameter
 sage lemur_param.sage
 ```
 
-With `verbosity = 1`, the script writes `summary.txt` in the current working
+The script writes `summary.txt` in the current working
 directory.  The rows correspond to the fixed `(d,k)=(256,4)` family across the
 supported `(tau,N)` cells.
 
@@ -138,7 +137,6 @@ For that cell, the estimator produces:
 | --- | ---: |
 | `d` | 256 |
 | `k` | 4 |
-| `ell` | 1 |
 | `n` | 4 |
 | `m` | 9 |
 | `omega` | 2 |
@@ -146,14 +144,14 @@ For that cell, the estimator produces:
 | `alpha_mlwe` | 1.6 |
 | `alpha_w` | 23 |
 | `alpha_H` | 60 |
-| `eta` | 776 |
+| `eta` | 512 |
 | `kappa` | 5 |
 | `kappaprime` | 3 |
-| `qprime` | 3469416721 |
-| `q` | 9007199254746113 |
-| `beta_z` | 14046 |
-| `beta_sigma` | 13229351 |
-| `beta_agg` | 919945 |
+| `qprime` | 867354289 |
+| `q` | 1125899906856961 |
+| `beta_z` | 7023 |
+| `beta_sigma` | 6614676 |
+| `beta_agg` | 606974 |
 | `beta_encode` | 593 |
 
 `beta_encode` is:
@@ -172,7 +170,7 @@ Required fields:
 
 - `name`
 - `d`, `tau`, `n_signers`
-- `k`, `ell`, `m`, `n`
+- `k`, `m`, `n`
 - `q_prime`
 - `alpha`, `alpha_h`, `beta_z`, `beta_sigma`
 - `q`, `omega`, `eta`, `beta_agg`

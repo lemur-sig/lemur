@@ -76,11 +76,15 @@ def rice_poly_bytes_est(d: int, sigma: float, rice_k: int) -> int:
     return math.ceil(d * rice_bits_per_coef(sigma, rice_k) / 8.0)
 
 
-def encoded_size(row: dict[str, int | float]) -> int:
+def encoded_breakdown(row: dict[str, int | float]) -> dict[str, int]:
+    """Per-component Rice-encoded byte counts for one parameter cell.
+
+    Returns kots / babai / sibling / u byte totals plus the 1-byte attempt
+    prefix.  `total = attempt + kots + babai + sibling + u`.
+    """
     n_signers = int(row["N"])
     d = int(row["d"])
     tau = int(row["tau"])
-    ell = int(row["ell"])
     k = int(row["k"])
     n = int(row["n"])
     m = int(row["m"])
@@ -98,11 +102,11 @@ def encoded_size(row: dict[str, int | float]) -> int:
     var_digit = eta * (eta + 1.0) / 3.0
     sigma_label = math.sqrt(n_signers * alpha_w * var_digit)
     sigma = alpha / math.sqrt(2.0 * math.pi)
-    sigma_z_ind = sigma * math.sqrt(1.0 + (k - ell) * alpha_h)
+    sigma_z_ind = sigma * math.sqrt(1.0 + (k - 1) * alpha_h)
     sigma_zagg = sigma_z_ind * math.sqrt(n_signers * alpha_w)
     sigma_babai = sigma_label / (2.0 * eta)
 
-    n_zagg_coeffs = ell * m * d
+    n_zagg_coeffs = m * d
     c_zagg = math.sqrt(2.0 * math.log(2.0 * n_zagg_coeffs * 256.0))
     zagg_bound = min(math.ceil(c_zagg * sigma_zagg), beta_sigma)
     zagg_dx = bit_length(2 * zagg_bound)
@@ -121,12 +125,17 @@ def encoded_size(row: dict[str, int | float]) -> int:
         else poly_bytes(d, agg_param)
     )
 
-    n_label = omega * kappa
-    n_u = k * n * kappa_prime
-    babai_total = tau * omega * kappa * pb_babai
-    sib_total = tau * n_label * pb_agg
-    u_total = n_u * pb_agg
-    return 1 + ell * m * pb_zagg + babai_total + sib_total + u_total
+    return {
+        "attempt": 1,
+        "kots": m * pb_zagg,
+        "babai": tau * omega * kappa * pb_babai,
+        "sibling": tau * omega * kappa * pb_agg,
+        "u": k * n * kappa_prime * pb_agg,
+    }
+
+
+def encoded_size(row: dict[str, int | float]) -> int:
+    return sum(encoded_breakdown(row).values())
 
 
 def parse_summary() -> list[dict[str, int | float]]:
@@ -136,10 +145,9 @@ def parse_summary() -> list[dict[str, int | float]]:
         "tau",
         "N",
         "d",
-        "epsilon",
+        "epsilon_hom",
         "alpha_w",
         "gamma",
-        "ell",
         "k",
         "n",
         "m",
@@ -180,11 +188,34 @@ def parse_summary() -> list[dict[str, int | float]]:
 
 
 def main() -> None:
-    print("tau,N,worst_case_KB,rice_encoded_KB")
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="print every (tau, N) row in summary.txt instead of only the "
+             "implementation TARGETS",
+    )
+    parser.add_argument(
+        "--breakdown",
+        action="store_true",
+        help="also print per-component KOTS / HVC breakdown (in KB)",
+    )
+    args = parser.parse_args()
+
+    if args.breakdown:
+        header = (
+            "tau,N,worst_case_KB,kots_KB,hvc_path_KB,hvc_sib_KB,hvc_u_KB,"
+            "hvc_total_KB,rice_encoded_KB"
+        )
+    else:
+        header = "tau,N,worst_case_KB,rice_encoded_KB"
+    print(header)
+
     for row in parse_summary():
         tau = int(row["tau"])
         n_signers = int(row["N"])
-        if (tau, n_signers) not in TARGETS:
+        if not args.all and (tau, n_signers) not in TARGETS:
             continue
         # summary.txt stores the worst-case total as the final numeric KB value.
         parts = next(
@@ -193,8 +224,21 @@ def main() -> None:
             if line.split()[:3] == [str(row["secpar"]), str(tau), str(n_signers)]
         )
         worst_case_kb = int(parts[-2])
-        rice_kb = encoded_size(row) / 1024.0
-        print(f"{tau},{n_signers},{worst_case_kb},{rice_kb:.1f}")
+        b = encoded_breakdown(row)
+        rice_kb = sum(b.values()) / 1024.0
+        if args.breakdown:
+            kots_kb = b["kots"] / 1024.0
+            path_kb = b["babai"] / 1024.0
+            sib_kb = b["sibling"] / 1024.0
+            u_kb = b["u"] / 1024.0
+            hvc_kb = path_kb + sib_kb + u_kb
+            print(
+                f"{tau},{n_signers},{worst_case_kb},{kots_kb:.2f},"
+                f"{path_kb:.1f},{sib_kb:.1f},{u_kb:.2f},{hvc_kb:.1f},"
+                f"{rice_kb:.1f}"
+            )
+        else:
+            print(f"{tau},{n_signers},{worst_case_kb},{rice_kb:.1f}")
 
 
 if __name__ == "__main__":

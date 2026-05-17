@@ -109,10 +109,10 @@ def msis_estimation(q, d, nrows, ncols, beta_infty, RHF):
       return False, rhf
 
 
-def get_alpha_H(secpar,d,ell,k):
+def get_alpha_H(secpar,d,k):
   for alpha_H in range(d+1):
     num = cardinality_of_set_of_ternary_poly(d, alpha_H)
-    if (k - 2 * ell - 1) * ln(num) >= 2 * secpar * ln(2):
+    if (k - 3) * ln(num) >= 2 * secpar * ln(2):
       return alpha_H
   raise ValueError("Can't find alpha_H.")
 
@@ -120,15 +120,15 @@ def get_alpha_H(secpar,d,ell,k):
 
 
 
-def get_beta_z(alpha,alpha_H,ell,k):
+def get_beta_z(alpha,alpha_H,k):
   """ Determines the norm bound of individual signature 
   """
-  return ZZ(ceil(12*alpha*sqrt(1+(k-ell)*alpha_H)))
+  return ZZ(ceil(6*alpha*sqrt(1+(k-1)*alpha_H)))
 
-def get_beta_sigma(beta_z,alpha_w,N,ell,m,d,epsilon):
+def get_beta_sigma(beta_z,alpha_w,N,m,d,epsilon_hom):
   """ Determines the norm bound of aggregated signature beta_sigma
   """
-  return ZZ(ceil(beta_z*sqrt(2*alpha_w*N*ln(2*ell*m*d/epsilon))))
+  return ZZ(ceil(beta_z*sqrt(2*alpha_w*N*ln(2*m*d/epsilon_hom))))
 
 
 def get_beta_kots(alpha_w,beta_sigma,beta_z):
@@ -137,10 +137,10 @@ def get_beta_kots(alpha_w,beta_sigma,beta_z):
   return ZZ(2*beta_sigma+2*alpha_w*beta_z)
 
 
-def get_beta_agg(d,tau,k,n,omega,eta,kappa,kappaprime,alpha_w,N,epsilon):
+def get_beta_agg(d,tau,k,n,omega,eta,kappa,kappaprime,alpha_w,N,epsilon_hom):
   """ Determines the minimal value beta_agg, such that constraint 1 is satisfied.
   """
-  return ZZ(ceil(eta * sqrt(2 * alpha_w * N * (ln(2 * d / epsilon) + ln(N * (2 * tau * omega * kappa + k * n * kappaprime + 2 * tau * omega))))))
+  return ZZ(ceil(eta * sqrt(2 * alpha_w * N * (ln(2 * d / epsilon_hom) + ln(N * (2 * tau * omega * kappa + k * n * kappaprime + 2 * tau * omega))))))
 
 
 
@@ -164,19 +164,19 @@ def compute_total_size_bits(alpha_w, gamma, kots_param, hvc_param):
 
 
 
-def find_kots_params(d, secpar, N, alpha_w, epsilon, verbose, ell, k, RHF):
+def find_kots_params(d, secpar, N, alpha_w, epsilon_hom, k, RHF):
   """ Finds parameters for the key homomorphic one-time signature scheme compatible with the inputs.
 
   Specifically, the parameters should result in a scheme with secpar bits security that supports aggregation of up to N signatures.
-  When aggregating using uniformly random ternary polynomials with Hamming weight alpha_w, the aggregated signature will verify with probability at least 1 - epsilon.
+  When aggregating using uniformly random ternary polynomials with Hamming weight alpha_w, the aggregated signature will verify with probability at least 1 - epsilon_hom.
   """
 
   # Constraint 14 in Lemur Parameter Constraints Table
-  alpha_H = get_alpha_H(secpar, d, ell, k)
+  alpha_H = get_alpha_H(secpar, d, k)
   # Constraints 5, 12, 15 in Lemur Parameter Constraints Table
   (alpha, alpha_mlwe) = get_alpha_and_alpha_mlwe(d, k)
   # Constraint 6 in Lemur Parameter Constraints Table
-  beta_z = get_beta_z(alpha, alpha_H, ell, k)
+  beta_z = get_beta_z(alpha, alpha_H, k)
 
 
   params = {}
@@ -189,7 +189,7 @@ def find_kots_params(d, secpar, N, alpha_w, epsilon, verbose, ell, k, RHF):
   for n in range(n_start, n_end): 
     for m in range(n+offset_start, n+offset_end):
       # Constraint 8 in Lemur Parameter Constraints Table
-      beta_sigma = get_beta_sigma(beta_z,alpha_w,N,ell,m,d,epsilon)
+      beta_sigma = get_beta_sigma(beta_z,alpha_w,N,m,d,epsilon_hom)
       beta_kots = get_beta_kots(alpha_w,beta_sigma,beta_z)
 
       base_q = 2 * beta_kots
@@ -198,7 +198,7 @@ def find_kots_params(d, secpar, N, alpha_w, epsilon, verbose, ell, k, RHF):
         q = find_kots_prime(d, base_q * q_multiplier)
 
 
-        size = (ell * m * d) * ceil(log(2 * beta_sigma + 1,2)) 
+        size = m * d * ceil(log(2 * beta_sigma + 1,2)) 
         if size >= min_size:
           continue
         
@@ -222,18 +222,18 @@ def find_kots_params(d, secpar, N, alpha_w, epsilon, verbose, ell, k, RHF):
   return params
 
 
-def find_hvc_params(d, secpar, N, tau, alpha_w, qprime, epsilon, verbose, k, n, RHF):
+def find_hvc_params(d, secpar, N, tau, alpha_w, qprime, epsilon_hom, k, n, RHF):
   """ Finds parameters for the homomorphic vector commitment compatible with the inputs.
 
   Specifically, the parameters should result in a vector commitment with secpar bits security that supports vectors of length 2^tau of payloads consisting of k * n R_{qprime} elements and aggregation of up to N openings.
-  When aggregating using uniformly random ternary polynomials with Hamming weight alpha_w, the aggregated opening will verify correctly with probability at least 1-epsilon.
+  When aggregating using uniformly random ternary polynomials with Hamming weight alpha_w, the aggregated opening will verify correctly with probability at least 1-epsilon_hom.
   """
 
 
   hvc_params = {}
   hvc_min_size = oo       
 
-  for qbit in range(16,64):
+  for qbit in range(16,65):
     for omega in range(512/d, 2048/d+1):
       for guess_kappa in range(2, 6):
         # this q is a guessed "q"
@@ -244,7 +244,7 @@ def find_hvc_params(d, secpar, N, tau, alpha_w, qprime, epsilon, verbose, k, n, 
         kappa = ceil(log(q,2*eta+1))
         kappaprime = ceil(log(qprime,2*eta+1))
         # Constraint 1 in Lemur Parameter Constraints Table
-        beta_agg = get_beta_agg(d, tau, k, n, omega, eta, kappa, kappaprime, alpha_w, N, epsilon)
+        beta_agg = get_beta_agg(d, tau, k, n, omega, eta, kappa, kappaprime, alpha_w, N, epsilon_hom)
         beta_hvc = 4 * beta_agg
         if q < 2 * beta_hvc:
           continue
@@ -271,38 +271,38 @@ def find_hvc_params(d, secpar, N, tau, alpha_w, qprime, epsilon, verbose, k, n, 
             hvc_min_size = size
             # Constraint 4 in Lemur Parameter Constraints Table
             beta_encode = ZZ(ceil(beta_agg/(2*eta)))
-            hvc_params = {"eta" : eta, "kappa" : kappa, "kappa'" : kappaprime ,"beta_agg" : beta_agg, "beta_encode" : beta_encode, "q" : q, "SIS beta" : beta_hvc, "size" : size, "epsilon" : epsilon, "omega": omega, "RHF_SIS_HVC": RHF_SIS_HVC, "q_bit": ceil(log(q, 2))}
+            hvc_params = {"eta" : eta, "kappa" : kappa, "kappa'" : kappaprime ,"beta_agg" : beta_agg, "beta_encode" : beta_encode, "q" : q, "SIS beta" : beta_hvc, "size" : size, "epsilon_hom" : epsilon_hom, "omega": omega, "RHF_SIS_HVC": RHF_SIS_HVC, "q_bit": ceil(log(q, 2))}
 
   if not hvc_params:
     return None
   return hvc_params
 
-def find_param(d, secpar, N, tau, epsilon, verbose, ell, k, RHF):
+def find_param(d, secpar, N, tau, epsilon_hom, k, RHF):
   """
     Finds parameters for the Lemur multi-signature scheme compatible with the inputs.
 
-    Specifically, the parameters should result in a synchronized multi-signature scheme with secpar bits security that supports 2^tau time periods and aggregation of up to N signatures, where any individual aggregation attempt will fail with probability at most epsilon.
+    Specifically, the parameters should result in a synchronized multi-signature scheme with secpar bits security that supports 2^tau time periods and aggregation of up to N signatures, where any individual aggregation attempt will fail with probability at most epsilon_hom.
   """
-  print("Finding params for secpar = " + str(secpar) + " tau = " + str(tau) + " N = " + str(N) + ", and epsilon=" + str(epsilon))
+  print("Finding params for secpar = " + str(secpar) + " tau = " + str(tau) + " N = " + str(N) + ", and epsilon_hom=" + str(epsilon_hom))
 
   
   # Constraint 18 in Lemur Parameter Constraints Table
   alpha_w = get_alpha_w(secpar,d)
   # Constraint 17 in Lemur Parameter Constraints Table
-  gamma = ZZ(ceil(secpar/log(1/(2*epsilon), 2)))
+  gamma = ZZ(ceil(secpar/log(1/(2*epsilon_hom), 2)))
 
-  kots_param = find_kots_params(d, secpar, N, alpha_w, epsilon, verbose, ell, k, RHF)
+  kots_param = find_kots_params(d, secpar, N, alpha_w, epsilon_hom, k, RHF)
   if kots_param is None:
     raise ValueError("KOTS parameters not found")
 
   hvc_param = find_hvc_params(d, secpar, N, tau, alpha_w, kots_param["q'"],
-                        epsilon, verbose, k, kots_param["n"], RHF)
+                        epsilon_hom, k, kots_param["n"], RHF)
   if hvc_param is None:
     raise ValueError("HVC parameters not found")
 
   return (alpha_w, gamma, kots_param, hvc_param)
 
-def find_params(dk_pairs, secpars, taus, N_list, epsilon_list, verbose, ell_list, RHF):
+def find_params(dk_pairs, secpars, taus, N_list, epsilon_hom_list, RHF):
   params = {}
   best_results = {}   # (secpar, tau, N) -> dict
   to_tabulate = []
@@ -320,11 +320,10 @@ def find_params(dk_pairs, secpars, taus, N_list, epsilon_list, verbose, ell_list
           }
 
         for d, k in dk_pairs:
-          for epsilon in epsilon_list:
-            for ell in ell_list:
+          for epsilon_hom in epsilon_hom_list:
               try:
                 alpha_w, gamma, kots_param, hvc_param = find_param(
-                  d, secpar, N, tau, epsilon, verbose, ell, k, RHF
+                  d, secpar, N, tau, epsilon_hom, k, RHF
                 )
               except (ValueError, KeyError, AssertionError):
                 continue
@@ -340,8 +339,7 @@ def find_params(dk_pairs, secpars, taus, N_list, epsilon_list, verbose, ell_list
                   "tau": tau,
                   "N": N,
                   "d": d,
-                  "epsilon": epsilon,
-                  "ell": ell,
+                  "epsilon_hom": epsilon_hom,
                   "k": k,
                   "alpha_w": alpha_w,
                   "gamma": gamma,
@@ -364,10 +362,9 @@ def find_params(dk_pairs, secpars, taus, N_list, epsilon_list, verbose, ell_list
       str(p["tau"]),
       str(p["N"]),
       str(p["d"]),
-      str(p["epsilon"]),
+      str(p["epsilon_hom"]),
       str(p["alpha_w"]),
       str(p["gamma"]),
-      str(p["ell"]),
       str(p["k"]),
       str(kots["n"]),
       str(kots["m"]),
@@ -394,19 +391,19 @@ def find_params(dk_pairs, secpars, taus, N_list, epsilon_list, verbose, ell_list
       f'{round_half_up(p["total_size"] / 8 / 1024)} KB'
     ])
 
-  if verbose > 0:
-    with open("summary.txt", "w") as f:
-      f.write(tabulate(
-        to_tabulate,
-        headers=[
-          "secpar", "tau", "N", "d", "epsilon", "alpha_w", "gamma", "ell", "k",
-          "n", "m", "omega", "RHF_LWE_KOTS", "RHF_SIS_KOTS", "RHF_SIS_HVC",
-          "alpha", "alpha_mlwe", "alpha_H", "beta_z", "beta_sigma", "beta_agg", "beta_encode",
-          "eta", "q", "q_bit", "kappa", "qprime", "qprime_bit", "kappaprime",
-          "sig size", "open size", "total size"
-        ],
-        tablefmt="simple_outline"
-      ))
+
+  with open("summary.txt", "w") as f:
+    f.write(tabulate(
+      to_tabulate,
+      headers=[
+        "secpar", "tau", "N", "d", "epsilon_hom", "alpha_w", "gamma", "k",
+        "n", "m", "omega", "RHF_LWE_KOTS", "RHF_SIS_KOTS", "RHF_SIS_HVC",
+        "alpha", "alpha_mlwe", "alpha_H", "beta_z", "beta_sigma", "beta_agg", "beta_encode",
+        "eta", "q", "q_bit", "kappa", "qprime", "qprime_bit", "kappaprime",
+        "sig size", "open size", "total size"
+      ],
+      tablefmt="grid"
+    ))
 
   return best_results
 
@@ -421,21 +418,18 @@ N_list = [1024, 32768, 131072, 1048576]
 # height of the tree: [12, 16, 20, 24]
 taus = [12, 16, 20, 24]
 # targeted failure probability: [2^(-10),2^(-15),2^(-16)]
-epsilon_list = [2^(-15)]  
-ell_list = [1]
+epsilon_hom_list = [2^(-15)]  
 RHF = 1.0045
 
 
-verbosity = 1
+
 
 params = find_params(
   dk_pairs,
   secpars,
   taus,
   N_list,
-  epsilon_list,
-  verbosity,
-  ell_list,
+  epsilon_hom_list,
   RHF
 )
 

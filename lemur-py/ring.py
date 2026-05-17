@@ -331,9 +331,9 @@ if __name__ == "__main__":
     import random
 
     # HVC modulus (NTT-friendly: q ≡ 1 mod 2d).
-    Q_D256_K4   = 9_007_199_254_746_113    # ~2^53
+    Q_D256_K4   = 1_125_899_906_856_961    # ~2^50
     # KOTS modulus (q' ≡ 17 mod 32, schoolbook path).
-    QP_D256_K4  = 3_469_416_721
+    QP_D256_K4  = 867_354_289
 
     random.seed(42)
 

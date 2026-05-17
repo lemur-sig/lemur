@@ -567,6 +567,34 @@ impl CrtBackend {
         self.crt_combine(acc_p1, acc_p2)
     }
 
+    /// Inverse-transform a paired NTT-domain accumulator and CRT-combine
+    /// into the exact centred signed integer coefficients, without reducing
+    /// them modulo `q`.
+    ///
+    /// This is for aggregating KOTS signatures over `ZZ`: individual
+    /// `w_i * z_i` products are small, but the final aggregate may exceed
+    /// `q'/2` and must remain the exact signed sum for the `beta_sigma`
+    /// verification bound.  `new_for_accum(q, d, terms)` has already checked
+    /// that the worst-case coefficient is below `P/2`, so the centred CRT
+    /// lift is unambiguous.
+    pub fn finalize_accum_slices_signed_i64(
+        &self,
+        acc_p1: &mut [u64],
+        acc_p2: &mut [u64],
+    ) -> Vec<i64> {
+        debug_assert_eq!(acc_p1.len(), self.d);
+        debug_assert_eq!(acc_p2.len(), self.d);
+        for x in acc_p1.iter_mut() {
+            *x = reduce_pseudo_mersenne(*x as u128, AUX_MERSENNE_C1, AUX_P1);
+        }
+        for x in acc_p2.iter_mut() {
+            *x = reduce_pseudo_mersenne(*x as u128, AUX_MERSENNE_C2, AUX_P2);
+        }
+        self.ctx1.inverse_in_place(acc_p1);
+        self.ctx2.inverse_in_place(acc_p2);
+        self.crt_combine_signed_i64(acc_p1, acc_p2)
+    }
+
     fn split(&self, a: &[u64]) -> (Vec<u64>, Vec<u64>) {
         let (q, hq) = (self.q, self.half_q);
         let mut a1 = Vec::with_capacity(self.d);
@@ -584,32 +612,45 @@ impl CrtBackend {
         (a1, a2)
     }
 
-    fn crt_combine(&self, c1: &[u64], c2: &[u64]) -> Vec<u64> {
-        let q_i128 = self.q as i128;
+    #[inline]
+    fn crt_centered_coeff(&self, r1: u64, r2: u64) -> i128 {
         let p1 = AUX_P1;
         let p2 = AUX_P2;
         let inv = self.p1_inv_mod_p2;
         let half_p: i128 = (AUX_P / 2) as i128;
         let big_p: i128 = AUX_P as i128;
 
+        // t = (r2 - r1) * inv mod p2
+        let diff: u64 = sub_mod_aux::<P2Marker>(r2, r1 % p2);
+        let t = mul_mod_aux::<P2Marker>(diff, inv);
+        // x = r1 + t * p1  in  [0, P)
+        let x: u128 = r1 as u128 + t as u128 * p1 as u128;
+        let mut xi: i128 = x as i128;
+        if xi > half_p {
+            xi -= big_p;
+        }
+        xi
+    }
+
+    fn crt_combine(&self, c1: &[u64], c2: &[u64]) -> Vec<u64> {
+        let q_i128 = self.q as i128;
         let mut out = Vec::with_capacity(self.d);
         for i in 0..self.d {
-            let r1 = c1[i];
-            let r2 = c2[i];
-            // t = (r2 - r1) * inv mod p2
-            let diff: u64 = sub_mod_aux::<P2Marker>(r2, r1 % p2);
-            let t = mul_mod_aux::<P2Marker>(diff, inv);
-            // x = r1 + t * p1  in  [0, P)
-            let x: u128 = r1 as u128 + t as u128 * p1 as u128;
-            let mut xi: i128 = x as i128;
-            if xi > half_p {
-                xi -= big_p;
-            }
+            let xi = self.crt_centered_coeff(c1[i], c2[i]);
             let mut y = xi % q_i128;
             if y < 0 {
                 y += q_i128;
             }
             out.push(y as u64);
+        }
+        out
+    }
+
+    fn crt_combine_signed_i64(&self, c1: &[u64], c2: &[u64]) -> Vec<i64> {
+        let mut out = Vec::with_capacity(self.d);
+        for i in 0..self.d {
+            let xi = self.crt_centered_coeff(c1[i], c2[i]);
+            out.push(i64::try_from(xi).expect("centred CRT coefficient exceeds i64"));
         }
         out
     }
@@ -710,7 +751,7 @@ mod tests {
 
     // Shipped KOTS modulus (q' ≡ 17 mod 32) is not NTT-friendly on
     // its own ring, so it routes through this CRT backend.
-    const KOTS_PARAMS: &[(u64, usize)] = &[(3_469_416_721, 256)];
+    const KOTS_PARAMS: &[(u64, usize)] = &[(867_354_289, 256)];
 
     #[test]
     fn crt_mul_matches_schoolbook() {

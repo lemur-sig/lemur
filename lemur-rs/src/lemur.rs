@@ -5,9 +5,9 @@ use sha3::digest::XofReader;
 use crate::aux_ntt::CrtBackend;
 use crate::error::LemurError;
 use crate::hvc::{
-    aggregate_openings_any, bds_advance, bds_init, bds_opening, hvc_ivrfy, hvc_open_with_known_leaf,
-    hvc_setup_with_profile, hvc_setup_with_profile_and_tau, hvc_svrfy, BdsState, HvcCom, HvcOpening,
-    HvcPp,
+    aggregate_openings_any, bds_advance, bds_init, bds_opening, hvc_ivrfy,
+    hvc_open_with_known_leaf, hvc_setup_with_profile, hvc_setup_with_profile_and_tau, hvc_svrfy,
+    BdsState, HvcCom, HvcOpening, HvcPp,
 };
 use crate::kots::{
     kots_ivrfy, kots_keygen, kots_pk_from_seed, kots_setup, kots_sign, kots_svrfy, KotsA, KotsSig,
@@ -68,6 +68,10 @@ const NTT_AGG_MAX_CHUNK: usize = 64;
 /// This is the KOTS-side analogue of HVC opening aggregation: accumulate in
 /// the two auxiliary-prime NTT domains, then pay one inverse NTT/CRT combine
 /// per output polynomial instead of one per signer per output polynomial.
+///
+/// The result is the exact signed integer aggregate, not reduced modulo the
+/// KOTS modulus.  This matters once the aggregate exceeds `q'/2` but still
+/// satisfies the paper's `beta_sigma` bound.
 fn aggregate_vec_crt_ntt(
     ws: &[Vec<i64>],
     vectors: &[&[i64]],
@@ -78,8 +82,6 @@ fn aggregate_vec_crt_ntt(
     assert!(!vectors.is_empty(), "aggregate_vec_crt_ntt: empty input");
 
     let d = backend.d();
-    let q = backend.q() as i64;
-    let half = q / 2;
     let acc_len = n_polys * d;
     debug_assert!(ws.iter().all(|w| w.len() == d));
     debug_assert!(vectors.iter().all(|v| v.len() == acc_len));
@@ -139,12 +141,9 @@ fn aggregate_vec_crt_ntt(
     let mut result = vec![0i64; acc_len];
     for poly in 0..n_polys {
         let off = poly * d;
-        let prod =
-            backend.finalize_accum_slices(&mut acc_p1[off..off + d], &mut acc_p2[off..off + d]);
-        for k in 0..d {
-            let x = prod[k] as i64;
-            result[off + k] = if x > half { x - q } else { x };
-        }
+        let prod = backend
+            .finalize_accum_slices_signed_i64(&mut acc_p1[off..off + d], &mut acc_p2[off..off + d]);
+        result[off..off + d].copy_from_slice(&prod);
     }
     result
 }
@@ -536,35 +535,25 @@ fn weighted_sum_commitments_u64_ntt(
 
 /// KOTS aggregate Z = Σᵢ wᵢ · sigᵢ.z routing.
 ///
-/// Applies the no-wrap gate (`N·αw·βz ≤ q'/2`) and chooses between the
-/// in-CRT-domain fast path and the per-signer slow fallback.  This is the
-/// single source of truth used by both production `lemur_aggregate` and
-/// the `bench_internals::aggregate_kots_z` wrapper, so the bench cannot
-/// drift from production over time.
-fn aggregate_kots_z_inner(
-    ws: &[Vec<i64>],
-    sigs: &[LemurSig],
-    profile: &Profile,
-) -> Vec<i64> {
+/// Uses the in-CRT-domain path whenever the auxiliary CRT backend has enough
+/// headroom for the exact signed aggregate, and falls back to per-signer
+/// scaling otherwise.  This is the single source of truth used by both
+/// production `lemur_aggregate` and the `bench_internals::aggregate_kots_z`
+/// wrapper, so the bench cannot drift from production over time.
+fn aggregate_kots_z_inner(ws: &[Vec<i64>], sigs: &[LemurSig], profile: &Profile) -> Vec<i64> {
     let m = profile.m;
     let d = profile.d;
     let n = sigs.len();
     let kots_rp = profile.kots_ring.clone();
-    let z_sum_no_wrap = (n as i128) * (profile.alpha_w as i128) * (profile.beta_z as i128)
-        <= (profile.q_kots() as i128) / 2;
-    let kots_crt_acc_backend = profile.kots_crt().and_then(|cfg| {
-        if z_sum_no_wrap {
-            CrtBackend::new_for_accum(cfg.q, cfg.d, n)
-        } else {
-            None
-        }
-    });
-    let kots_crt_single_backend =
-        if profile.kots_crt().is_some() && kots_crt_acc_backend.is_none() {
-            profile.kots_crt().map(|cfg| cfg.backend())
-        } else {
-            None
-        };
+    let kots_crt_acc_backend = profile
+        .kots_crt()
+        .and_then(|cfg| CrtBackend::new_for_accum(cfg.q, cfg.d, n));
+    let kots_crt_single_backend = if profile.kots_crt().is_some() && kots_crt_acc_backend.is_none()
+    {
+        profile.kots_crt().map(|cfg| cfg.backend())
+    } else {
+        None
+    };
 
     if profile.kots_crt().is_some() {
         if let Some(backend) = kots_crt_acc_backend.as_ref() {
@@ -671,21 +660,11 @@ pub fn lemur_aggregate(
     let n = pks.len();
     let pks_bytes = concat_pk_bytes(pks);
 
-    // The CRT NTT aggregate canonicalizes once at the end.  The routing
-    // (in-CRT-domain fast path vs. per-signer slow fallback) is shared with
-    // `bench_internals::aggregate_kots_z` via `aggregate_kots_z_inner`.
-    //
-    // The fast path activates iff `N·alpha_w·beta_z <= q'/2`, since each
-    // coefficient of `Σᵢ wᵢ·zᵢ` is bounded by `N·alpha_w·beta_z` (ternary
-    // randomizers have `||wᵢ||₁ ≤ alpha_w`; iVrfy on each partial signature
-    // guarantees `||zᵢ||∞ ≤ beta_z`), and the centred representative in
-    // `(-q'/2, q'/2]` equals the unreduced signed sum only when the
-    // magnitude stays under `q'/2`.  For the shipped profile `D256_K4`
-    // (`alpha_w=23, beta_z=7023, q' ≈ 3.47·10⁹`) the crossover is at
-    // `N ≈ 10739`, so the fast path is used at `N ∈ {2^10, 8192}` and the
-    // slow per-signer fallback kicks in at `N ∈ {2^15, 2^17, 2^20}`.  Both
-    // paths produce identical centred outputs; the crossover is a
-    // performance-only routing decision.
+    // The CRT NTT aggregate keeps the exact signed coefficient sum rather
+    // than reducing modulo q'.  Older code had to fall back once
+    // `N·alpha_w·beta_z > q'/2`; with exact signed CRT finalization, the
+    // fast path remains valid whenever `CrtBackend::new_for_accum(..., N)`
+    // accepts the auxiliary-prime headroom.
 
     for attempt in 1..=gamma {
         let ws = hash_to_randomizers(t, msg, &pks_bytes, attempt, n, profile);
@@ -709,7 +688,7 @@ pub fn lemur_aggregate(
             attempt,
         };
 
-        if lemur_avrfy(pp, pks, t, msg, &sigma_agg).is_ok() {
+        if lemur_avrfy_with_randomizers_inner(pp, pks, t, msg, &sigma_agg, &ws).is_ok() {
             return Ok(sigma_agg);
         }
     }
@@ -745,7 +724,22 @@ fn lemur_avrfy_inner(
     let profile = pp.profile;
     let pks_bytes = concat_pk_bytes(pks);
     let ws = hash_to_randomizers(t, msg, &pks_bytes, sigma_agg.attempt, pks.len(), profile);
-    let c_agg = weighted_sum_commitments(&ws, pks, profile);
+    lemur_avrfy_with_randomizers_inner(pp, pks, t, msg, sigma_agg, &ws)
+}
+
+fn lemur_avrfy_with_randomizers_inner(
+    pp: &LemurPp,
+    pks: &[LemurPk],
+    t: usize,
+    msg: &[u8],
+    sigma_agg: &LemurAggSig,
+    ws: &[Vec<i64>],
+) -> Result<(), LemurError> {
+    if ws.len() != pks.len() {
+        return Err(LemurError::VerifyFailed);
+    }
+    let profile = pp.profile;
+    let c_agg = weighted_sum_commitments(ws, pks, profile);
     let opk_agg = hvc_svrfy(&pp.hvc_pp, &c_agg, t, &sigma_agg.d_agg)?;
     kots_svrfy(&pp.kots_a, &opk_agg, msg, &sigma_agg.z_agg, profile)
 }
@@ -848,19 +842,18 @@ mod tests {
         assert_eq!(fast, reference);
     }
 
-    /// At `N` past the algebraic no-wrap crossover for `D256_K4`
-    /// (`N·alpha_w·beta_z > q'/2`, i.e. `N > q'/(2·alpha_w·beta_z) ≈ 10739`),
-    /// `lemur_aggregate` routes to the per-signer slow path.  Synthetic
-    /// `z`-vectors with `||z||∞ ≤ beta_z` and ternary `w`-vectors of
-    /// weight `alpha_w` are constructed at `N = n_crossover + 1` (the
-    /// smallest integer past the crossover, computed at runtime from the
-    /// profile constants); the per-signer `scale_mat_crt`+sum result is
-    /// compared against the in-NTT-domain `aggregate_vec_crt_ntt` to
-    /// confirm the two paths still agree past the gate.  Both paths
-    /// produce the centred signed sum mod `q'`, so equivalence must hold
-    /// for any `N` inside the CRT backend's headroom.
+    /// Past the old algebraic no-wrap crossover for `D256_K4`
+    /// (`N·alpha_w·beta_z > q'/2`, i.e. `N > q'/(2·alpha_w·beta_z) ≈ 2685`),
+    /// the KOTS aggregate must remain the exact signed integer sum rather
+    /// than the centred representative modulo `q'`.  Synthetic `z`-vectors
+    /// with `||z||∞ ≤ beta_z` and ternary `w`-vectors of weight `alpha_w`
+    /// are constructed at `N = n_crossover + 1` (the smallest integer past
+    /// the old crossover, computed at runtime from the profile constants);
+    /// the per-signer `scale_mat_crt`+sum result is compared against the
+    /// in-NTT-domain `aggregate_vec_crt_ntt` to confirm the CRT path returns
+    /// the same exact signed sum.
     #[test]
-    fn aggregate_vec_paths_agree_past_no_wrap_crossover() {
+    fn aggregate_vec_crt_ntt_returns_exact_signed_sum_past_q_half() {
         let profile = &D256_K4;
         let cfg = profile.kots_crt().expect("D256_K4 uses CRT KOTS");
         let d = profile.d;
@@ -873,33 +866,30 @@ mod tests {
         // load-bearing, and inside the fast backend's `terms` headroom.
         let n: usize = n_crossover + 1;
         // Sanity: the algebraic gate must in fact be false at this `n`.
-        let z_sum_no_wrap =
-            (n as i128) * (alpha_w as i128) * (beta_z as i128) <= q_prime / 2;
-        assert!(!z_sum_no_wrap, "test setup failed: still inside fast-path range");
+        let z_sum_no_wrap = (n as i128) * (alpha_w as i128) * (beta_z as i128) <= q_prime / 2;
+        assert!(
+            !z_sum_no_wrap,
+            "test setup failed: still inside fast-path range"
+        );
         let backend_acc = cfg.backend_for_accum(n);
         let backend_single = cfg.backend();
 
         let ws: Vec<Vec<i64>> = (0..n)
-            .map(|signer| {
+            .map(|_| {
                 let mut w = vec![0i64; d];
-                for j in 0..alpha_w {
-                    let idx = (17 * signer + 31 * j) % d;
-                    w[idx] = if (signer + j) & 1 == 0 { 1 } else { -1 };
-                }
+                w[..alpha_w].fill(1);
                 w
             })
             .collect();
-        // Synthetic `z`-vectors: pick coefficients deterministically in
-        // `[-beta_z, beta_z]` so they satisfy the iVrfy bound the slow
-        // path's no-wrap analysis relies on.
+        // Synthetic `z`-vectors stay inside the iVrfy bound while forcing
+        // one aggregate coefficient above q'/2.
         let vectors: Vec<Vec<i64>> = (0..n)
-            .map(|signer| {
-                (0..m * d)
-                    .map(|i| {
-                        let raw = (signer as i64 * 1009 + i as i64 * 1597) % (2 * beta_z + 1);
-                        raw - beta_z
-                    })
-                    .collect()
+            .map(|_| {
+                let mut v = vec![0i64; m * d];
+                // With w[0..alpha_w] = 1, coefficient alpha_w-1 of the
+                // first product contains alpha_w copies of beta_z.
+                v[..alpha_w].fill(beta_z);
+                v
             })
             .collect();
         let vector_refs: Vec<&[i64]> = vectors.iter().map(|v| v.as_slice()).collect();
@@ -917,6 +907,10 @@ mod tests {
             })
             .expect("nonempty vector set");
 
+        assert!(
+            reference[alpha_w - 1].abs() as i128 > q_prime / 2,
+            "test setup failed: aggregate did not exceed q'/2"
+        );
         assert_eq!(fast, reference);
     }
 

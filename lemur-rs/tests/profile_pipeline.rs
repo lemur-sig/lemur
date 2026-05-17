@@ -90,7 +90,7 @@ fn tau_extremes_recompute_runtime_hvc_bounds() {
 fn agg_encoding_snapshots_match_python_formula() {
     let cases = [
         (&D256_K4, 1024usize, 378_933i64, 20usize, 5usize, 15usize),
-        (&D256_K4, 2usize, 16_747i64, 16usize, 0usize, 11usize),
+        (&D256_K4, 2usize, 16_747i64, 16usize, 0usize, 10usize),
     ];
 
     for (profile, n_signers, zagg_bound, zagg_dx, babai_k, agg_k) in cases {

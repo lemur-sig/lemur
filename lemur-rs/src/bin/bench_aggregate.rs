@@ -7,13 +7,14 @@
 //!
 //! **Scope.**  This binary only measures the shipped implementation profile
 //! `D256_K4`, which is pinned to the paper's `τ=20, N=2^10` cell
-//! (`profile.n_signers = 1024`, `beta_agg = 919945`, `eta = 776`, `omega = 2`,
+//! (`profile.n_signers = 1024`, `beta_agg = 606974`, `eta = 512`, `omega = 2`,
 //! `kappa = 5`).  N=8192 is included as an in-profile scaling reference
-//! (`bench`-compatible; cleanly inside the KOTS no-wrap fast path with
-//! crossover at `N ≈ 10739`).  The paper's `N ∈ {2^15, 2^17, 2^20}` rows
-//! use different parameter cells (larger `k, m, omega, eta, beta_agg`) and
-//! cannot be measured by running this binary at N>8192 — that would only
-//! stress-test the τ=20 N=1024 profile out of spec.
+//! (`bench`-compatible).  KOTS aggregation stays in the CRT-NTT path at both
+//! N values when the auxiliary CRT headroom permits exact signed
+//! reconstruction.  The paper's `N ∈ {2^15, 2^17, 2^20}` rows use different
+//! parameter cells (larger `k, m, omega, eta, beta_agg`) and cannot be
+//! measured by running this binary at N>8192 — that would only stress-test
+//! the τ=20 N=1024 profile out of spec.
 //!
 //! Aggregation breakdown sub-steps (1-5) plus end-to-end `lemur_aggregate`:
 //!     1. Individual pre-verify (rogue-key check, ×N, rayon-parallel)
@@ -94,8 +95,8 @@ fn main() {
     // ---------------------------------------------------------------
     // N choice rationale:
     //   * 1024  -- the shipped D256_K4 profile cell (matches `profile.n_signers`).
-    //   * 8192  -- in-profile scaling reference; still on the KOTS no-wrap fast
-    //              path (crossover at N ≈ 10739 for D256_K4).
+    //   * 8192  -- in-profile scaling reference; KOTS Z aggregation still
+    //              uses the CRT-NTT path when auxiliary-prime headroom allows.
     //
     // We deliberately do not include N ∈ {2^15, 2^17, 2^20} here: the paper's
     // larger-N rows use *different* parameter cells (larger `k, m, omega, eta,
@@ -119,9 +120,7 @@ fn main() {
     let unique_signers: usize = 2;
 
     println!();
-    println!(
-        "--- Pre-generating {unique_signers} unique signers (keygen+sign each) ---"
-    );
+    println!("--- Pre-generating {unique_signers} unique signers (keygen+sign each) ---");
     let prep_start = Instant::now();
     let mut base_pks = Vec::with_capacity(unique_signers);
     let mut base_sig_bytes = Vec::with_capacity(unique_signers);
@@ -149,9 +148,7 @@ fn main() {
     for i in 0..max_n {
         let idx = i % unique_signers;
         all_pks.push(base_pks[idx].clone());
-        all_sigs.push(
-            sig_decode(&base_sig_bytes[idx], &pp, slot).expect("sig round-trip failed"),
-        );
+        all_sigs.push(sig_decode(&base_sig_bytes[idx], &pp, slot).expect("sig round-trip failed"));
     }
     println!("  Replicated {unique_signers} -> {max_n} signers");
 
@@ -214,20 +211,17 @@ fn main() {
         let pks_bytes = concat_pk_bytes_pub(pks);
 
         // Run `lemur_aggregate` once up-front to discover the successful
-        // attempt number.  At small N (within the KOTS no-wrap fast path)
-        // this is almost always 1; past the crossover, attempt 1 can fail
-        // the avrfy norm bound and the retry loop advances.  Using the
-        // actual successful attempt guarantees the synthetic aggregate
-        // built below mirrors a real, accepting aggregate.
-        let probe_agg =
-            lemur_aggregate(&pp, pks, slot, msg, sigs).expect("aggregate probe failed");
+        // attempt number.  Attempt 1 can fail the avrfy norm bound and the
+        // retry loop advances.  Using the actual successful attempt guarantees
+        // the synthetic aggregate built below mirrors a real, accepting
+        // aggregate.
+        let probe_agg = lemur_aggregate(&pp, pks, slot, msg, sigs).expect("aggregate probe failed");
         let success_attempt = probe_agg.attempt;
         drop(probe_agg);
 
         // 2b. Randomizer derivation (at the successful attempt).
         let t_randomizers = time(reps_xof_pk_z_open, || {
-            let ws =
-                hash_to_randomizers_pub(slot, msg, &pks_bytes, success_attempt, n, profile);
+            let ws = hash_to_randomizers_pub(slot, msg, &pks_bytes, success_attempt, n, profile);
             std::hint::black_box(ws);
         });
 
@@ -278,9 +272,8 @@ fn main() {
         });
 
         // Print aggregation breakdown.
-        let pct = |x: Duration| -> f64 {
-            100.0 * x.as_secs_f64() / t_full_agg.as_secs_f64().max(1e-12)
-        };
+        let pct =
+            |x: Duration| -> f64 { 100.0 * x.as_secs_f64() / t_full_agg.as_secs_f64().max(1e-12) };
         println!(
             "  {:<50}  {:>10}    {:>6.1}%",
             "1. Individual pre-verify (×N, rayon)",
@@ -317,12 +310,8 @@ fn main() {
             fmt_duration(t_avrfy_probe),
             pct(t_avrfy_probe)
         );
-        let sum_isolated = t_preverify
-            + t_concat
-            + t_randomizers
-            + t_kots_z
-            + t_hvc_open
-            + t_avrfy_probe;
+        let sum_isolated =
+            t_preverify + t_concat + t_randomizers + t_kots_z + t_hvc_open + t_avrfy_probe;
         println!(
             "  {:<50}  {:>10}    {:>6.1}%",
             "── Sum of isolated steps",
@@ -362,17 +351,14 @@ fn main() {
         // c. HVC sVrfy.
         let c_agg = weighted_sum_commitments_pub(&ws, pks, profile);
         let t_c = time(reps_avrfy, || {
-            let opk =
-                hvc_svrfy(&pp.hvc_pp, &c_agg, slot, &sigma_agg.d_agg).expect("hvc_svrfy");
+            let opk = hvc_svrfy(&pp.hvc_pp, &c_agg, slot, &sigma_agg.d_agg).expect("hvc_svrfy");
             std::hint::black_box(opk);
         });
 
         // d. KOTS sVrfy.
-        let opk_agg =
-            hvc_svrfy(&pp.hvc_pp, &c_agg, slot, &sigma_agg.d_agg).expect("hvc_svrfy");
+        let opk_agg = hvc_svrfy(&pp.hvc_pp, &c_agg, slot, &sigma_agg.d_agg).expect("hvc_svrfy");
         let t_d = time(reps_avrfy * 4, || {
-            let ok = kots_svrfy(&pp.kots_a, &opk_agg, msg, &sigma_agg.z_agg, profile)
-                .is_ok();
+            let ok = kots_svrfy(&pp.kots_a, &opk_agg, msg, &sigma_agg.z_agg, profile).is_ok();
             std::hint::black_box(ok);
         });
 

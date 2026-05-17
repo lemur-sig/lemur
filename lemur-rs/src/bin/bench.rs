@@ -10,18 +10,18 @@
 use std::time::{Duration, Instant};
 
 use lemur_rs::codec::{agg_sig_encode, sig_decode, sig_encode, sizes};
-use lemur_rs::hvc::{add_openings, scale_opening_any};
+use lemur_rs::hvc::aggregate_openings_any;
 use lemur_rs::kots::{kots_keygen, kots_keygen_ctx, kots_pk_from_seed, kots_sign, KotsSig};
 use lemur_rs::lemur::{
+    bench_internals::{aggregate_kots_z, hash_to_randomizers_pub},
     lemur_aggregate, lemur_avrfy, lemur_ivrfy, lemur_keygen, lemur_setup_with_profile,
-    lemur_sign_seed, lemur_sign_stateful_mut, scale_mat_crt, LemurAggSig,
+    lemur_sign_seed, lemur_sign_stateful_mut, LemurAggSig,
 };
 use lemur_rs::materialized::{lemur_sign_tree, MaterializedHvcTree};
 use lemur_rs::params::{GAUSS_CDT_BITS, GAUSS_TAILCUT};
 use lemur_rs::profile::{Profile, D256_K4};
 use lemur_rs::sample::{
-    agg_randomizer_xof, build_cdt, slot_seed, xof_gauss_poly_ctx, xof_gauss_poly_with_profile,
-    xof_ternary_poly, GaussCtx,
+    build_cdt, slot_seed, xof_gauss_poly_ctx, xof_gauss_poly_with_profile, GaussCtx,
 };
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake128;
@@ -146,55 +146,13 @@ fn aggregate_verified_only(
     let profile = pp.profile;
     let n = pks.len();
     let pks_bytes = concat_pk_bytes(pks);
-    let m = profile.m;
     let gamma = profile.gamma;
-    let d = profile.d;
 
     for attempt in 1..=gamma {
-        let mut xof = agg_randomizer_xof(t, msg, &pks_bytes, attempt);
-        let ws: Vec<_> = (0..n)
-            .map(|_| xof_ternary_poly(&mut xof, profile.alpha_w, profile.d))
-            .collect();
-
-        let z_agg = if let Some(cfg) = profile.kots_crt() {
-            let backend = cfg.backend();
-            sigs.iter()
-                .zip(ws.iter())
-                .map(|(sig, w)| scale_mat_crt(w, &sig.z.0, 1, m, &backend))
-                .fold(vec![0i64; m * d], |mut acc, scaled| {
-                    for (a, b) in acc.iter_mut().zip(scaled.iter()) {
-                        *a += *b;
-                    }
-                    acc
-                })
-        } else if let Some(kots_rp64) = profile.kots_ring64.as_ref() {
-            sigs.iter()
-                .zip(ws.iter())
-                .map(|(sig, w)| lemur_rs::poly::scale_mat_u64(w, &sig.z.0, 1, m, kots_rp64))
-                .fold(vec![0i64; m * d], |mut acc, scaled| {
-                    for (a, b) in acc.iter_mut().zip(scaled.iter()) {
-                        *a += *b;
-                    }
-                    acc
-                })
-        } else {
-            let kots_rp = profile.kots_ring_u32();
-            sigs.iter()
-                .zip(ws.iter())
-                .map(|(sig, w)| lemur_rs::poly::scale_mat(w, &sig.z.0, 1, m, kots_rp))
-                .fold(vec![0i64; m * d], |mut acc, scaled| {
-                    for (a, b) in acc.iter_mut().zip(scaled.iter()) {
-                        *a += *b;
-                    }
-                    acc
-                })
-        };
-
-        let mut d_agg = scale_opening_any(&ws[0], &sigs[0].opening, profile);
-        for i in 1..n {
-            let scaled = scale_opening_any(&ws[i], &sigs[i].opening, profile);
-            d_agg = add_openings(&d_agg, &scaled);
-        }
+        let ws = hash_to_randomizers_pub(t, msg, &pks_bytes, attempt, n, profile);
+        let z_agg = aggregate_kots_z(&ws, sigs, profile);
+        let opening_refs: Vec<_> = sigs.iter().map(|sig| &sig.opening).collect();
+        let d_agg = aggregate_openings_any(&ws, &opening_refs, profile);
 
         let sigma_agg = LemurAggSig {
             z_agg: KotsSig(z_agg),
@@ -692,7 +650,11 @@ fn main() {
         let wall = Instant::now();
         let agg_sig = lemur_aggregate(&pp, pks, slot, msg, sigs).expect("aggregation failed");
         let agg_elapsed = wall.elapsed();
-        println!("Secure Aggregation: {}", fmt_duration(agg_elapsed));
+        println!(
+            "Secure Aggregation: {} (attempts: {})",
+            fmt_duration(agg_elapsed),
+            agg_sig.attempt
+        );
         assert_eq!(agg_sig.attempt, agg_sig_verified.attempt);
         assert_eq!(agg_sig.z_agg.0, agg_sig_verified.z_agg.0);
         assert_eq!(agg_sig.d_agg.u, agg_sig_verified.d_agg.u);

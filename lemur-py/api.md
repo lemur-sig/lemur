@@ -25,7 +25,7 @@ The **`profiles.py`** module at the top of the graph supplies the fixed paramete
 | polynomial matrix | `(r, c, d)` | int64 | r×c polynomial matrix |
 | KOTS secret key S | `(k, m, d)` | int64 | Gaussian, small coefficients |
 | KOTS public key T | `(k, n, d)` | int64 | in R_{q'} |
-| KOTS signature Z | `(ell, m, d)` | int64 | over Z (not reduced mod q') |
+| KOTS signature Z | `(m, d)` | int64 | over Z (not reduced mod q') |
 | HVC label | `(omega*kappa, d)` | int64 | balanced digit representation |
 | HVC commitment c | `(omega, d)` | int64 | in R_q, values in [0, q-1] |
 | HVC opening d | `tuple` | — | `(path_labels, sibling_labels, u)` |
@@ -62,7 +62,7 @@ class LemurProfile:
     # Common
     d: int; tau: int; n_signers: int
     # KOTS
-    k: int; ell: int; m: int; n: int
+    k: int; m: int; n: int
     q_prime: int
     alpha: float           # paper's Gaussian width parameter
     sigma: float           # actual sampling stddev (= α/√(2π))
@@ -283,9 +283,9 @@ Implements the Lemur KOTS construction.
 `KOTS(profile=DEFAULT)` builds the default-case instance; any field from the
 profile can be overridden via the optional keyword arguments listed below.
 
-**Default profile (D256_K4):** `d=256`, `q=3_469_416_721` (`q_prime`), `k=4`,
-`ell=1`, `m=9`, `n=4`, `alpha=87.0`, `sigma=34.71...` (= α/√(2π)),
-`alpha_h=60`, `beta_z=14_046`, `beta_sigma=13_229_351`.
+**Default profile (D256_K4):** `d=256`, `q=867_354_289` (`q_prime`), `k=4`,
+`m=9`, `n=4`, `alpha=87.0`, `sigma=34.71...` (= α/√(2π)),
+`alpha_h=60`, `beta_z=7_023`, `beta_sigma=6_614_676`.
 
 **Derived attributes:**
 - `profile: LemurProfile` — the active profile (for downstream modules to inherit)
@@ -302,7 +302,6 @@ profile can be overridden via the optional keyword arguments listed below.
 | `d` | `profile.d` | Ring dimension |
 | `q` | `profile.q_prime` | KOTS modulus q' |
 | `k` | `profile.k` | Secret key rows; also HVC message rows ρ |
-| `ell` | `profile.ell` | Signature rows; `H = [I_ell | H']` |
 | `m` | `profile.m` | Columns of S and rows of A |
 | `n` | `profile.n` | Columns of A; also HVC message cols ν |
 | `alpha` | `profile.alpha` | Paper symbol α (Gaussian width parameter) |
@@ -343,7 +342,7 @@ Returns `(S, T)`:
   `A = [I_n; A2]`.
 
 ```python
-kots.sign(A2, S, mu: bytes) -> np.ndarray   # Z: (ell, m, d)
+kots.sign(A2, S, mu: bytes) -> np.ndarray   # Z: (m, d)
 ```
 Returns `Z = H·S` computed over Z (signed exact arithmetic via `ring.mul_signed`).
 `H = [I_ell | H']` where `H'[i,j] = xof_ternary(SHAKE128(mu || j || b'H'))`.
@@ -375,8 +374,8 @@ Requires a `KOTS` instance to read `d`, `q'` (as `q_prime`), and key shape
 (`rho = kots.k`, `nu = kots.n`). If `profile=None` the profile is inherited
 from `kots.profile`.
 
-**Defaults from D256_K4 profile (default):** `q=9_007_199_254_746_113`,
-`omega=2`, `eta=776`, `tau=20`, `alpha_w=23`, `n_signers=1024`.
+**Defaults from D256_K4 profile (default):** `q=1_125_899_906_856_961`,
+`omega=2`, `eta=512`, `tau=20`, `alpha_w=23`, `n_signers=1024`.
 
 **Derived attributes:**
 - `profile: LemurProfile`
@@ -683,7 +682,7 @@ pop-front order; `treehash` is one record per level in `[0, tau-k)` carrying
 and the tail-node stack.  Labels are bit-packed at
 `dx_dig = ceil(log2(2*eta+1))` bits per coefficient with offset `+eta`,
 reusing the sibling-label encoding from individual signatures
-(`dx_dig = 11` under D256_K4 where η = 776).  A fresh keygen state at
+(`dx_dig = 11` under D256_K4 where η = 512).  A fresh keygen state at
 τ=3 is about 16 KB; at τ=20 it is ~134 KB.
 
 `sign_stateful` does not mutate its input `sk_state`: it deep-copies the BDS
