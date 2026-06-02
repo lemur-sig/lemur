@@ -160,16 +160,14 @@ def eta_vareps(n, vareps, max_basis_norm):
 # LAMBDA 12 BASIS AND ALPHA CALCULATIONS
 # ---------------------------------------------------------------------------------------
 def Lambda12_RBasis(params):
-    k, ell, d, alpha_H, p = params["k"], params["ell"], params["d"], params["alpha_H"], params["p"]
-    r = k - 2 * ell
-    r_minus_ell = r - ell
+    k, d, alpha_H, p = params["k"], params["d"], params["alpha_H"], params["p"]
 
     Zp, RZ, Rp = get_ring(d, p)
 
-    H1_1 = rand_mat_RZ(RZ,ell,ell,d,alpha_H)
-    H2_1 = rand_mat_RZ(RZ,ell,ell,d,alpha_H)
-    H1_2 = rand_mat_RZ(RZ,ell,r_minus_ell,d,alpha_H)
-    H2_2 = rand_mat_RZ(RZ,ell,r_minus_ell,d,alpha_H)
+    H1_1 = rand_mat_RZ(RZ,1,1,d,alpha_H)
+    H2_1 = rand_mat_RZ(RZ,1,1,d,alpha_H)
+    H1_2 = rand_mat_RZ(RZ,1,k-3,d,alpha_H)
+    H2_2 = rand_mat_RZ(RZ,1,k-3,d,alpha_H)
 
     XZ = H2_1-H1_1
     Xp = reduce_matrix_mod_p(XZ, d, Zp, Rp)
@@ -182,18 +180,13 @@ def Lambda12_RBasis(params):
 
     M = -YZ*(H2_2-H1_2)
 
-    A = block_matrix([[M],[identity_matrix(RZ,r_minus_ell)]])
-    B = block_matrix([[identity_matrix(RZ,ell)],
-                      [zero_matrix(RZ,r_minus_ell,ell)]])
+    A = block_matrix([[M],[identity_matrix(RZ,k-3)]])
+    B = block_matrix([[identity_matrix(RZ,1)],
+                      [zero_matrix(RZ,k-3,1)]])
 
     return A.augment(p*B)
 
-def alpha_3_theory(params):
-    k, ell, d, alpha_H, p, vareps = params["k"], params["ell"], params["d"], params["alpha_H"], params["p"], params["vareps_3"]
-    n = (k - 2 * ell) * d
-    max_basis_norm = sqrt(2 * alpha_H)
-    alpha_3 = RR(p * eta_vareps(n, vareps, max_basis_norm))
-    return alpha_3
+
 
 def L12_max_basis_norm_exp(params, L12_Rbasis):
     """ Returns ONLY the maximum L2 norm of the basis vectors """
@@ -212,14 +205,13 @@ def L12_max_basis_norm_exp(params, L12_Rbasis):
 # ALPHA 2 & 3 FUNCTIONS
 # ---------------------------------------------------------------------------------------
 def get_alpha_2(params, trials, raw_filename):
-    k, ell, d, alpha_H, p = params["k"], params["ell"], params["d"], params["alpha_H"], params["p"]
+    k, d, alpha_H, p = params["k"], params["d"], params["alpha_H"], params["p"]
     vareps = params["vareps_2"]
-    k_minus_ell = k - ell
 
     Zp, RZ, Rp = get_ring(d, p)
 
     alpha0_init_sq = 2 * pi / 3
-    constant_term = RR((1 + ell * alpha_H) * ln(2 * (k - ell) * d * (1 + 1 / vareps)) / pi)
+    constant_term = RR((1 + alpha_H) * ln(2 * (k - 1) * d * (1 + 1 / vareps)) / pi)
 
     # Trackers
     spec_norm_list = []
@@ -227,9 +219,9 @@ def get_alpha_2(params, trials, raw_filename):
 
     for i in range(trials):
         print(f"\r  [Alpha 2] Trial {i+1}/{trials}...", end="")
-        Hprime = rand_mat_RZ(RZ, ell, k_minus_ell, d, alpha_H)
+        Hprime = rand_mat_RZ(RZ, 1, k-1, d, alpha_H)
         R_Basis = block_matrix([[-Hprime],
-                                [identity_matrix(RZ, k_minus_ell)]])
+                                [identity_matrix(RZ, k-1)]])
 
         Z_Basis = expand_R_basis_to_Z_basis(R_Basis, d=d, RZ=RZ)
 
@@ -265,7 +257,7 @@ def get_alpha_2(params, trials, raw_filename):
 
 def get_alpha_3(params, trials, raw_filename):
     d = params["d"]
-    n = (params["k"] - 2 * params["ell"]) * d
+    n = (params["k"] - 3) * d
     vareps = params["vareps_3"]
     
     # Trackers
@@ -298,6 +290,13 @@ def get_alpha_3(params, trials, raw_filename):
     
     return final_alpha3, max_l2_norm_L12_basis_vector_list
 
+
+def alpha_3_theory(params):
+    k, d, alpha_H, p, vareps = params["k"], params["d"], params["alpha_H"], params["p"], params["vareps_3"]
+    n = (k - 3) * d
+    max_basis_norm = sqrt(2 * alpha_H)
+    alpha_3 = RR(p * eta_vareps(n, vareps, max_basis_norm))
+    return alpha_3
 
 # ---------------------------------------------------------------------------------------
 # MAIN ORCHESTRATOR
@@ -371,12 +370,13 @@ def get_alpha_and_alpha0(params, num_trials):
     return alpha, alpha0
 
 def epsilon_cor(params):
-    k, ell, d, alpha_H, p, vareps_1 = params["k"], params["ell"], params["d"], params["alpha_H"], params["p"], params["vareps_1"]
-    return ell * 20 * d * (2**(-162) + 2 * (k - ell) * alpha_H * vareps_1) <= 2**(-128)
-
+    # maximum value of m = 20, according to our parameter search
+    k, d, alpha_H, p, vareps_1 = params["k"], params["d"], params["alpha_H"], params["p"], params["vareps_1"]
+    return 20 * d * (2**(-162) + 2 * (k - 1) * alpha_H * vareps_1) <= 2**(-128)
+    
 
 def get_vareps_3(params):
-    k, ell, d, alpha_H, p, vareps_3 = params["k"], params["ell"], params["d"], params["alpha_H"], params["p"], params["vareps_3"]
+    k, d, alpha_H, p, vareps_3 = params["k"], params["d"], params["alpha_H"], params["p"], params["vareps_3"]
     m = 20
     t1 = 2
     return ((1+vareps_3)/(1-vareps_3))**(2*m) * p**(-d * m / t1) <= 2**(-128)
@@ -388,7 +388,7 @@ def get_vareps_3(params):
 
 if __name__=="__main__":
 
-    params = dict(k=5, ell=1, d=256, alpha_H=23, p=5, vareps_1=2**(-150), vareps_2=2**(-136), vareps_3=2**(-0.5))
+    params = dict(k=4, d=256, alpha_H=60, p=5, vareps_1=2**(-150), vareps_2=2**(-136), vareps_3=2**(-0.5))
     num_trials = 1000
 
     alpha, alpha0 = get_alpha_and_alpha0(params, num_trials)

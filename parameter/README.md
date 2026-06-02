@@ -140,19 +140,19 @@ For that cell, the estimator produces:
 | `n` | 4 |
 | `m` | 9 |
 | `omega` | 2 |
-| `alpha` | 87 |
+| `alpha` | 83 |
 | `alpha_mlwe` | 1.6 |
 | `alpha_w` | 23 |
 | `alpha_H` | 60 |
-| `eta` | 512 |
+| `eta` | 169 |
 | `kappa` | 5 |
-| `kappaprime` | 3 |
-| `qprime` | 867354289 |
-| `q` | 1125899906856961 |
-| `beta_z` | 7023 |
-| `beta_sigma` | 6614676 |
-| `beta_agg` | 606974 |
-| `beta_encode` | 593 |
+| `kappaprime` | 4 |
+| `qprime` | 827463089 |
+| `q` | 4398046523393 |
+| `beta_z` | 6700 |
+| `beta_sigma` | 6310455 |
+| `beta_agg` | 175655 |
+| `beta_encode` | 520 |
 
 `beta_encode` is:
 

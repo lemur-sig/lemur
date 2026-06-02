@@ -105,9 +105,9 @@ def _profile(*, name, d, tau, n_signers, k, m, n, q_prime,
 D256_K4 = _profile(
     name="d256_k4",
     d=256, tau=20, n_signers=1024,
-    k=4, m=9, n=4, q_prime=867_354_289,
-    alpha=87, alpha_h=60, beta_z=7_023, beta_sigma=6_614_676,
-    q=1_125_899_906_856_961, omega=2, eta=512, beta_agg=606_974,
+    k=4, m=9, n=4, q_prime=827_463_089,
+    alpha=83, alpha_h=60, beta_z=6_700, beta_sigma=6_310_455,
+    q=4_398_046_523_393, omega=2, eta=169, beta_agg=175_655,
     alpha_w=23,
 )
 

@@ -304,25 +304,25 @@ pub static D256_K4: Profile = Profile {
     k: 4,
     m: 9,
     n: 4,
-    alpha: 87.0,
-    sigma: 34.707_978_394_924_645,
+    alpha: 83.0,
+    sigma: 33.112_209_273_318_92,
     alpha_h: 60,
-    beta_z: 7_023,
-    beta_sigma: 6_614_676,
+    beta_z: 6_700,
+    beta_sigma: 6_310_455,
     kots_ring: None,
     kots_ring64: None,
     kots_crt: Some(KotsCrtCfg {
-        q: 867_354_289,
+        q: 827_463_089,
         d: 256,
     }),
     omega: 2,
-    eta: 512,
+    eta: 169,
     kappa: 5,
-    kappa_prime: 3,
-    beta_agg: 606_974,
-    beta_encode: 593,
+    kappa_prime: 4,
+    beta_agg: 175_655,
+    beta_encode: 520,
     hvc_ring: HvcRing::U64(RingParams64 {
-        q: 1_125_899_906_856_961,
+        q: 4_398_046_523_393,
         q_inv: t_d256_k4::D256_K4_HVC_Q_INV,
         r2: t_d256_k4::D256_K4_HVC_R2,
         inv_d_mont: t_d256_k4::D256_K4_HVC_INV_D_MONT,
@@ -394,6 +394,6 @@ mod tests {
 
     #[test]
     fn q_kots_reports_modulus() {
-        assert_eq!(D256_K4.q_kots(), 867_354_289);
+        assert_eq!(D256_K4.q_kots(), 827_463_089);
     }
 }

@@ -14,7 +14,7 @@
 //! callers (currently only the benchmark binary) that can afford the
 //! memory in exchange for O(τ) per-signature latency.  Callers that want
 //! disk-persistable signer state should still use `LemurStateSk` (the
-//! ~134 KB BDS08 cache).
+//! ~110 KB BDS08 cache).
 //!
 //! The decomposed form of each label (`OMEGA*KAPPA*D` i64) is never
 //! stored — it would be 8× larger.  Instead, `opening` re-decomposes
@@ -234,7 +234,7 @@ fn parent_of(i: usize) -> usize {
 /// essentially equivalent to a Chipmunk-style O(1) stored-tree sign at
 /// per-level constant work.  Intended for benchmark comparisons; the
 /// normal API path for production use is `lemur_sign_stateful_mut`,
-/// which has ~134 KB state instead of ~8 GiB.
+/// which has ~110 KB state instead of ~8 GiB.
 pub fn lemur_sign_tree(
     pp: &LemurPp,
     sk: &LemurSk,

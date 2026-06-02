@@ -81,7 +81,7 @@ def find_hvc_prime(d,beta):
 
 
 def find_kots_prime(d,beta):
-  """ Finds the smallest CRT-friendly KOTS prime q' > beta.
+  """ Finds the smallest CRT-friendly KOTS prime q' > beta. We set t2 = 8 satisfying Constraint 11.
   """
   q = next_prime(beta)
   while q % 32 != 17:
@@ -92,7 +92,7 @@ def find_kots_prime(d,beta):
 def get_alpha_and_alpha_mlwe(d, k):
   # These values are obtained from the numerical experiments from alpha.sage
   if d == 256 and k == 4:
-    return (87, 1.6)
+    return (83, 1.6)
 
   raise ValueError("Unsupported (d, k) pair for current alpha values")
 
@@ -100,13 +100,18 @@ def get_alpha_and_alpha_mlwe(d, k):
 
 
 def msis_estimation(q, d, nrows, ncols, beta_infty, RHF):
-    params = MSISParameterSet(d, ncols, nrows, beta_infty, q, norm="linf")
-    bkz_block = MSIS_summarize_attacks(params)[0]
-    rhf = round(delta_BKZ(bkz_block), 5)
-    if rhf <= RHF:
-      return True, rhf
-    else:
-      return False, rhf
+    try:
+      params = MSISParameterSet(d, ncols, nrows, beta_infty, q, norm="linf")
+      result = MSIS_summarize_attacks(params)
+      if result is None:
+        return False, None
+
+      bkz_block = result[0]
+      rhf = round(delta_BKZ(bkz_block), 5)
+
+      return (rhf <= RHF), rhf
+    except Exception:
+      return False, None
 
 
 def get_alpha_H(secpar,d,k):
@@ -138,9 +143,9 @@ def get_beta_kots(alpha_w,beta_sigma,beta_z):
 
 
 def get_beta_agg(d,tau,k,n,omega,eta,kappa,kappaprime,alpha_w,N,epsilon_hom):
-  """ Determines the minimal value beta_agg, such that constraint 1 is satisfied.
+  """ Determines the minimal value beta_agg, such that Constraint 1 is satisfied.
   """
-  return ZZ(ceil(eta * sqrt(2 * alpha_w * N * (ln(2 * d / epsilon_hom) + ln(N * (2 * tau * omega * kappa + k * n * kappaprime + 2 * tau * omega))))))
+  return ZZ(ceil(eta * sqrt(2 * alpha_w * N * (ln(2 * d / epsilon_hom) + ln(2 * tau * omega * kappa + k * n * kappaprime + 2 * tau * omega)))))
 
 
 
@@ -171,9 +176,9 @@ def find_kots_params(d, secpar, N, alpha_w, epsilon_hom, k, RHF):
   When aggregating using uniformly random ternary polynomials with Hamming weight alpha_w, the aggregated signature will verify with probability at least 1 - epsilon_hom.
   """
 
-  # Constraint 14 in Lemur Parameter Constraints Table
+  # Constraint 15 in Lemur Parameter Constraints Table
   alpha_H = get_alpha_H(secpar, d, k)
-  # Constraints 5, 12, 15 in Lemur Parameter Constraints Table
+  # Constraints 5, 13, 16 in Lemur Parameter Constraints Table
   (alpha, alpha_mlwe) = get_alpha_and_alpha_mlwe(d, k)
   # Constraint 6 in Lemur Parameter Constraints Table
   beta_z = get_beta_z(alpha, alpha_H, k)
@@ -190,24 +195,24 @@ def find_kots_params(d, secpar, N, alpha_w, epsilon_hom, k, RHF):
     for m in range(n+offset_start, n+offset_end):
       # Constraint 8 in Lemur Parameter Constraints Table
       beta_sigma = get_beta_sigma(beta_z,alpha_w,N,m,d,epsilon_hom)
-      beta_kots = get_beta_kots(alpha_w,beta_sigma,beta_z)
 
+      size = m * d * ceil(log(2 * beta_sigma + 1,2)) 
+      if size >= min_size:
+        continue
+      
+      beta_kots = get_beta_kots(alpha_w,beta_sigma,beta_z)
       base_q = 2 * beta_kots
-      for q_multiplier in [1, 2, 4, 8, 16, 32, 64]: 
-        # Constraint 13 in Lemur Parameter Constraints Table
+      for q_multiplier in [1, 2, 4, 8, 16, 32, 64, 128, 256]: 
+        # Constraint 11 in Lemur Parameter Constraints Table
         q = find_kots_prime(d, base_q * q_multiplier)
 
 
-        size = m * d * ceil(log(2 * beta_sigma + 1,2)) 
-        if size >= min_size:
+        # Constraint 17 in Lemur Parameter Constraints Table
+        msis_ok, RHF_SIS_KOTS = msis_estimation(q, d, n, m, beta_kots, RHF)
+        if not msis_ok:
           continue
-        
-        # Constraint 16 in Lemur Parameter Constraints Table
-        if not msis_estimation(q, d, n, m, beta_kots, RHF)[0]:
-          continue
-        RHF_SIS_KOTS = msis_estimation(q, d, n, m, beta_kots, RHF)[1]
 
-        # Constraint 15 in Lemur Parameter Constraints Table
+        # Constraint 16 in Lemur Parameter Constraints Table
         lwe_param = LWE.Parameters(n=(m-n)*d, q=q, Xs=ND.DiscreteGaussian(alpha_mlwe), Xe=ND.DiscreteGaussian(alpha_mlwe))
         RHF_LWE_KOTS = LWE.estimate.rough(lwe_param)['usvp']['delta']
         if RHF_LWE_KOTS > RHF:
@@ -235,7 +240,7 @@ def find_hvc_params(d, secpar, N, tau, alpha_w, qprime, epsilon_hom, k, n, RHF):
 
   for qbit in range(16,65):
     for omega in range(512/d, 2048/d+1):
-      for guess_kappa in range(2, 6):
+      for guess_kappa in range(2, 9):
         # this q is a guessed "q"
         q = pow(2, qbit)
 
@@ -286,9 +291,9 @@ def find_param(d, secpar, N, tau, epsilon_hom, k, RHF):
   print("Finding params for secpar = " + str(secpar) + " tau = " + str(tau) + " N = " + str(N) + ", and epsilon_hom=" + str(epsilon_hom))
 
   
-  # Constraint 18 in Lemur Parameter Constraints Table
+  # Constraint 19 in Lemur Parameter Constraints Table
   alpha_w = get_alpha_w(secpar,d)
-  # Constraint 17 in Lemur Parameter Constraints Table
+  # Constraint 18 in Lemur Parameter Constraints Table
   gamma = ZZ(ceil(secpar/log(1/(2*epsilon_hom), 2)))
 
   kots_param = find_kots_params(d, secpar, N, alpha_w, epsilon_hom, k, RHF)
@@ -411,7 +416,7 @@ def find_params(dk_pairs, secpars, taus, N_list, epsilon_hom_list, RHF):
 
 # security parameter
 secpars = [128]
-# Constraint 9 in Lemur Parameter Constraints Table
+# Constraint 9 and 12 in Lemur Parameter Constraints Table
 dk_pairs = [(256, 4)]
 # number of users: [1024, 32768, 131072, 1048576]
 N_list = [1024, 32768, 131072, 1048576]

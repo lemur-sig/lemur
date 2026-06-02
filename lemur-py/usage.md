@@ -141,11 +141,11 @@ that tree depth.
 | File | Size at `tau=20, N=1024` |
 |------|--------------------------:|
 | `pp.bin` | 65 B |
-| `*.pk` | ~3.4 KB |
+| `*.pk` | ~2.7 KB |
 | `*.sk` | 32 B |
-| `*.state` | ~134 KB |
-| `*.sig` | ~89.2 KB |
-| `agg.sig` | ~195 KB |
+| `*.state` | ~110 KB |
+| `*.sig` | ~78.2 KB |
+| `agg.sig` | ~185.5 KB |
 
 `sig_decode` requires `pp` and the slot index so path labels can be
 reconstructed.  `agg_sig_decode` also requires the signer count, because the

@@ -106,7 +106,7 @@ cargo run --release --bin lemur -- sizes --n 1024
 ```
 
 This reproduces the implemented aggregated-signature-size cell (`N=2^10`,
-190.3 KB).  The larger signature-size cells are predicted Rice-encoded sizes
+185.5 KB).  The larger signature-size cells are predicted Rice-encoded sizes
 for the corresponding `tau=20` rows in `parameter/summary.txt`, computed via:
 
 ```sh
@@ -125,15 +125,15 @@ which is why the encoder only searches Rice for the HVC components — KOTS
 
 | N | Worst-case (Table 5) | KOTS `Z_agg` | HVC opening | Rice-encoded total |
 | ---: | ---: | ---: | ---: | ---: |
-| `2^10` | 238 KB | 5.6 KB | 184.7 KB | 190.3 KB |
-| `2^15` | 322 KB | 7.2 KB | 261.7 KB | 268.9 KB |
-| `2^20` | 444 KB | 7.8 KB | 370.6 KB | 378.4 KB |
+| `2^10` | 232 KB | 5.6 KB | 179.9 KB | 185.5 KB |
+| `2^15` | 315 KB | 6.9 KB | 257.6 KB | 264.5 KB |
+| `2^20` | 444 KB | 7.8 KB | 371.7 KB | 379.6 KB |
 
-Rice compresses **HVC only** (the KOTS savings vs Table 5 — 7→5.6, 8→7.2,
+Rice compresses **HVC only** (the KOTS savings vs Table 5 — 7→5.6, 8→6.9,
 9→7.8 KB — come from the `N`-dependent statistical bound on `Z_agg`, not
-Rice).  At `N=2^10` the HVC opening drops from 232 KB (Table 5) to 184.7 KB,
-a 20% reduction; this dilutes to ~14% of the *total* because the
-already-compact KOTS component does not shrink further.
+Rice).  At `N=2^10` the HVC opening drops from 226 KB (Table 5) to 179.9 KB,
+a ~20% reduction; because HVC dominates the bytes (~97%) this carries through
+to the *total*, which drops from 232 KB to 185.5 KB.
 
 Run the main timing benchmark:
 
@@ -181,12 +181,11 @@ Aggregation(2^15) = Aggregation(8192) * 32768 / 8192
 Aggregation(2^20) = Aggregation(8192) * 1048576 / 8192
 ```
 
-For the 24-thread run on AMD Ryzen AI 9 HX 370 used in the paper, the
-per-attempt cost at `N=8192` is `2.05 s` (the as-measured `4.09 s` wall
-includes a 2-attempt retry, an artifact of the 2-unique-signer fixture
-replicated 4096-fold; a deployment with N distinct signers would not
-trigger the retry).  Using the per-attempt cost, linear scaling gives
-approximately `8.2 s` at `N=2^15` and `4.4 min` at `N=2^20`.
+For the 24-thread run on AMD Ryzen AI 9 HX 370 used in the paper, `Secure
+Aggregation` at `N=8192` measures `2.79 s` (1 attempt on this fixture; the
+2-unique-signer fixture replicated 4096-fold can occasionally force a retry,
+but a deployment with N distinct signers would not).  Linear scaling gives
+approximately `11.2 s` at `N=2^15` and `6.0 min` at `N=2^20`.
 
 Representative serialized sizes for `tau=20, N=1024`:
 
@@ -194,10 +193,10 @@ Representative serialized sizes for `tau=20, N=1024`:
 | --- | ---: |
 | Public parameters | 65 B |
 | Secret seed | 32 B |
-| Stateful signer cache | 134.4 KB |
-| Public key | 3.2 KB |
-| Individual signature | 89.2 KB |
-| Aggregated signature, `N=1024` | 190.3 KB |
+| Stateful signer cache | 110.0 KB |
+| Public key | 2.7 KB |
+| Individual signature | 78.2 KB |
+| Aggregated signature, `N=1024` | 185.5 KB |
 
 Representative `bench --fast` timings from a 24-thread run on AMD Ryzen AI 9
 HX 370 (single-core boost up to 5.16 GHz; all-core sustained ≈ 3.5–4 GHz under
@@ -205,19 +204,19 @@ the default `powersave` governor):
 
 | Operation | Time |
 | --- | ---: |
-| Key generation | 1.2 min |
-| Online signing, KOTS only | 488 us |
-| Full signing, including HVC open | 1.2 min |
-| Stateful signing, BDS08 | 4.57 ms |
-| Tree-backed signing (`--with-tree`) | 1.46 ms |
-| Individual pre-verify, `N=1024` | 1.55 s |
-| Aggregate after verified inputs, `N=1024` | 939 ms |
-| Secure aggregation, `N=1024` | 1.12 s |
-| Batch verification, `N=1024` | 14.9 ms |
-| Individual pre-verify, `N=8192` | 12.43 s |
-| Aggregate after verified inputs, `N=8192` | 3.09 s |
-| Secure aggregation, `N=8192` | 2.05 s/attempt (4.09 s wall, 2 attempts on this fixture) |
-| Batch verification, `N=8192` | 108.6 ms |
+| Key generation | 1.3 min |
+| Online signing, KOTS only | 398 us |
+| Full signing, including HVC open | 1.3 min |
+| Stateful signing, BDS08 | 4.17 ms |
+| Tree-backed signing (`--with-tree`) | 1.62 ms |
+| Individual pre-verify, `N=1024` | 1.60 s |
+| Aggregate after verified inputs, `N=1024` | 983 ms |
+| Secure aggregation, `N=1024` | 1.16 s |
+| Batch verification, `N=1024` | 15.0 ms |
+| Individual pre-verify, `N=8192` | 12.89 s |
+| Aggregate after verified inputs, `N=8192` | 1.66 s |
+| Secure aggregation, `N=8192` | 2.79 s (1 attempt on this fixture) |
+| Batch verification, `N=8192` | 111.2 ms |
 
 Timings are machine-dependent and laptop-thermal-state sensitive; with
 `powersave` governor and frequency-boost enabled, per-run noise of a few
@@ -235,24 +234,24 @@ $\tau=20$ on the same 24-thread machine:
 
 | Step | `N=1024` | `N=8192` |
 | --- | ---: | ---: |
-| Individual pre-verify (×N, rayon) | 173.8 ms (15.7%) | 1.27 s (47.0%) |
-| PK serialization (`concat_pk_bytes`) | 6.8 ms (0.6%) | 59.2 ms (2.2%) |
-| Randomizer derivation (SHAKE128) | 5.3 ms (0.5%) | 43.6 ms (1.6%) |
-| KOTS aggregate `Σ wᵢ·zᵢ` | 9.7 ms (0.9%) | 63.3 ms (2.3%) |
-| HVC opening aggregate `Σ wᵢ·dᵢ` | 890.8 ms (80.2%) | 1.27 s (46.7%) |
-| `avrfy` probe (close-loop check) | 15.2 ms (1.4%) | 118.5 ms (4.4%) |
-| **End-to-end `lemur_aggregate`** | **1.11 s** | **2.71 s** |
+| Individual pre-verify (×N, rayon) | 177.6 ms (15.4%) | 1.31 s (46.7%) |
+| PK serialization (`concat_pk_bytes`) | 6.2 ms (0.5%) | 59.9 ms (2.1%) |
+| Randomizer derivation (SHAKE128) | 5.4 ms (0.5%) | 43.6 ms (1.6%) |
+| KOTS aggregate `Σ wᵢ·zᵢ` | 9.8 ms (0.8%) | 64.1 ms (2.3%) |
+| HVC opening aggregate `Σ wᵢ·dᵢ` | 937.7 ms (81.2%) | 1.32 s (47.2%) |
+| `avrfy` probe (close-loop check) | 15.5 ms (1.3%) | 113.7 ms (4.1%) |
+| **End-to-end `lemur_aggregate`** | **1.16 s** | **2.80 s** |
 
 **Batch verification (`lemur_avrfy`) sub-steps:**
 
 | Step | `N=1024` | `N=8192` |
 | --- | ---: | ---: |
-| PK serialization | 6.8 ms (44.6%) | 59.2 ms (51.2%) |
-| Randomizer derivation | 5.3 ms (34.4%) | 46.4 ms (40.1%) |
-| HVC commitment aggregate `Σ wᵢ·Tᵢ` | 0.91 ms (5.9%) | 6.07 ms (5.3%) |
-| HVC sVrfy (Babai decode + verify) | 2.67 ms (17.5%) | 1.25 ms (1.1%) |
-| KOTS sVrfy | 0.57 ms (3.7%) | 0.27 ms (0.2%) |
-| **End-to-end `lemur_avrfy`** | **15.3 ms** | **115.7 ms** |
+| PK serialization | 6.2 ms (40.0%) | 59.9 ms (52.6%) |
+| Randomizer derivation | 5.3 ms (34.1%) | 46.8 ms (41.1%) |
+| HVC commitment aggregate `Σ wᵢ·Tᵢ` | 0.89 ms (5.8%) | 5.63 ms (4.9%) |
+| HVC sVrfy (Babai decode + verify) | 2.72 ms (17.5%) | 1.30 ms (1.1%) |
+| KOTS sVrfy | 0.56 ms (3.6%) | 0.27 ms (0.2%) |
+| **End-to-end `lemur_avrfy`** | **15.5 ms** | **114.0 ms** |
 
 `bench_aggregate` is also the source of the new NTT-domain aggregation
 microbenchmark used in the paper's implementation-notes section.
@@ -260,7 +259,7 @@ microbenchmark used in the paper's implementation-notes section.
 #### Scope: this profile only measures the `N=2^10` parameter cell
 
 The Rust artifact ships a single parameter profile, `D256_K4`, with
-`profile.n_signers = 1024`, `beta_agg = 606 974`, `eta = 512`, `omega = 2`,
+`profile.n_signers = 1024`, `beta_agg = 175 655`, `eta = 169`, `omega = 2`,
 `kappa = 5`. The paper's `N ∈ {2^15, 2^17, 2^20}` rows are **different
 parameter cells** (larger `k, m, omega, eta, beta_agg`; see
 `parameter/summary.txt`), not just the same scheme at larger N. Running
@@ -293,7 +292,7 @@ replicated copies), so 2 unique signers is fine for the supported N ≤ 8192;
 bumping past N=8192 would also require a higher `unique_signers` setting.
 
 A note on aggregated-signature sizes:  the `lemur sizes` numbers in the
-serialized-size table above (e.g. 190.3 KB at `N=1024`) are the **predicted**
+serialized-size table above (e.g. 185.5 KB at `N=1024`) are the **predicted**
 encoding lengths.  For Rice-coded components — Babai path, sibling labels,
 and `u` — the per-coefficient cost is the analytic mean of the Rice
 codeword length under a continuous-Gaussian model `X ~ N(0, σ²)` on the

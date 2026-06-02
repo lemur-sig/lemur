@@ -39,10 +39,10 @@ PROFILES = {
             "table.  KOTS uses the CRT backend (aux_ntt.rs) because q' "
             "≡ 17 (mod 32) has no native length-d NTT."
         ),
-        'q_kots': 867_354_289,
-        'q_hvc':  1_125_899_906_856_961,
+        'q_kots': 827_463_089,
+        'q_hvc':  4_398_046_523_393,
         'd':      256,
-        'sigma':  _sigma_from_alpha(87),
+        'sigma':  _sigma_from_alpha(83),
         'cdt_bits': 32,
         'tailcut':  5,
         'cdt_prefix_bits': 9,

@@ -171,10 +171,14 @@ def parse_summary() -> list[dict[str, int | float]]:
         "kappaprime",
     ]
     for line in SUMMARY.read_text().splitlines():
-        parts = line.split()
-        if not parts or not parts[0].isdigit():
+        # summary.txt is a '|'-delimited pretty table; separator rows
+        # (e.g. "+----+----+") contain no '|' and are skipped.
+        if "|" not in line:
             continue
-        values = parts[: len(keys)]
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells or not cells[0].isdigit():
+            continue
+        values = cells[: len(keys)]
         row: dict[str, int | float] = {}
         for key, value in zip(keys, values):
             if "/" in value:
@@ -183,6 +187,10 @@ def parse_summary() -> list[dict[str, int | float]]:
                 row[key] = float(value)
             else:
                 row[key] = int(value)
+        # Columns after the parameter keys are sig/open/total size; the last
+        # cell is the worst-case "total size" (e.g. "232 KB").
+        if len(cells) > len(keys):
+            row["worst_case_kb"] = int(cells[-1].split()[0])
         rows.append(row)
     return rows
 
@@ -217,13 +225,8 @@ def main() -> None:
         n_signers = int(row["N"])
         if not args.all and (tau, n_signers) not in TARGETS:
             continue
-        # summary.txt stores the worst-case total as the final numeric KB value.
-        parts = next(
-            line.split()
-            for line in SUMMARY.read_text().splitlines()
-            if line.split()[:3] == [str(row["secpar"]), str(tau), str(n_signers)]
-        )
-        worst_case_kb = int(parts[-2])
+        # worst-case total (Table 5 fixed-width) captured by parse_summary().
+        worst_case_kb = int(row["worst_case_kb"])
         b = encoded_breakdown(row)
         rice_kb = sum(b.values()) / 1024.0
         if args.breakdown:

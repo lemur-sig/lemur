@@ -751,7 +751,7 @@ mod tests {
 
     // Shipped KOTS modulus (q' ≡ 17 mod 32) is not NTT-friendly on
     // its own ring, so it routes through this CRT backend.
-    const KOTS_PARAMS: &[(u64, usize)] = &[(867_354_289, 256)];
+    const KOTS_PARAMS: &[(u64, usize)] = &[(827_463_089, 256)];
 
     #[test]
     fn crt_mul_matches_schoolbook() {

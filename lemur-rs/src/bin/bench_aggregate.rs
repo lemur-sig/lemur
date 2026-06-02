@@ -7,7 +7,7 @@
 //!
 //! **Scope.**  This binary only measures the shipped implementation profile
 //! `D256_K4`, which is pinned to the paper's `τ=20, N=2^10` cell
-//! (`profile.n_signers = 1024`, `beta_agg = 606974`, `eta = 512`, `omega = 2`,
+//! (`profile.n_signers = 1024`, `beta_agg = 175655`, `eta = 169`, `omega = 2`,
 //! `kappa = 5`).  N=8192 is included as an in-profile scaling reference
 //! (`bench`-compatible).  KOTS aggregation stays in the CRT-NTT path at both
 //! N values when the auxiliary CRT headroom permits exact signed

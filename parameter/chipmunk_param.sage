@@ -92,8 +92,7 @@ def get_beta_kots(alpha_w,alpha_H,phi,beta_sigma):
 def get_beta_agg(n,tau,xi,eta,kappa,kappaprime,alpha_w,rho,epsilon):
   """ Determines the minimal value beta_agg, such that constraint 1 is satisfied.
   """
-  # return ZZ(ceil(eta*sqrt(2*alpha_w*rho*(log(2*n/epsilon)+log(2*tau*kappa+xi*kappaprime)))))
-  return ZZ(ceil(eta*sqrt(2*alpha_w*rho*(log(2*n/epsilon)+log(rho*(2*tau*kappa+xi*kappaprime+2*tau))))))
+  return ZZ(ceil(eta*sqrt(2*alpha_w*rho*(log(2*n/epsilon)+log(2*tau*kappa+xi*kappaprime)))))
 
 
 def find_ntt_friendly_prime(n,beta):

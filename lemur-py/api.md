@@ -283,9 +283,9 @@ Implements the Lemur KOTS construction.
 `KOTS(profile=DEFAULT)` builds the default-case instance; any field from the
 profile can be overridden via the optional keyword arguments listed below.
 
-**Default profile (D256_K4):** `d=256`, `q=867_354_289` (`q_prime`), `k=4`,
-`m=9`, `n=4`, `alpha=87.0`, `sigma=34.71...` (= α/√(2π)),
-`alpha_h=60`, `beta_z=7_023`, `beta_sigma=6_614_676`.
+**Default profile (D256_K4):** `d=256`, `q=827_463_089` (`q_prime`), `k=4`,
+`m=9`, `n=4`, `alpha=83.0`, `sigma=33.11...` (= α/√(2π)),
+`alpha_h=60`, `beta_z=6_700`, `beta_sigma=6_310_455`.
 
 **Derived attributes:**
 - `profile: LemurProfile` — the active profile (for downstream modules to inherit)
@@ -374,8 +374,8 @@ Requires a `KOTS` instance to read `d`, `q'` (as `q_prime`), and key shape
 (`rho = kots.k`, `nu = kots.n`). If `profile=None` the profile is inherited
 from `kots.profile`.
 
-**Defaults from D256_K4 profile (default):** `q=1_125_899_906_856_961`,
-`omega=2`, `eta=512`, `tau=20`, `alpha_w=23`, `n_signers=1024`.
+**Defaults from D256_K4 profile (default):** `q=4_398_046_523_393`,
+`omega=2`, `eta=169`, `tau=20`, `alpha_w=23`, `n_signers=1024`.
 
 **Derived attributes:**
 - `profile: LemurProfile`
@@ -528,7 +528,7 @@ top-level `LEMUR.sign_stateful`.
 `K = bds_choose_k(τ)` sets the treehash budget.  For even τ the choice is
 `K = 2`; for odd τ it is `K = 3`.  The cache size is dominated by the
 dense `auth[τ]` vector plus the `2^K − K − 1` pre-computed right-sibling
-labels in the retain FIFOs, giving ~134 KB at τ=20.
+labels in the retain FIFOs, giving ~110 KB at τ=20.
 
 #### `TreehashInst` class
 
@@ -682,8 +682,8 @@ pop-front order; `treehash` is one record per level in `[0, tau-k)` carrying
 and the tail-node stack.  Labels are bit-packed at
 `dx_dig = ceil(log2(2*eta+1))` bits per coefficient with offset `+eta`,
 reusing the sibling-label encoding from individual signatures
-(`dx_dig = 11` under D256_K4 where η = 512).  A fresh keygen state at
-τ=3 is about 16 KB; at τ=20 it is ~134 KB.
+(`dx_dig = 9` under D256_K4 where η = 169).  A fresh keygen state at
+τ=3 is about 20 KB; at τ=20 it is ~110 KB.
 
 `sign_stateful` does not mutate its input `sk_state`: it deep-copies the BDS
 state before advancing, so callers holding a pre-sign snapshot can re-use
@@ -855,7 +855,7 @@ codec.pp_encode(kots_seed, hvc_seed) -> bytes        # 65 B (seeds + tau)
 codec.pp_decode(data) -> tuple[pp, bytes, bytes]     # rejects tau mismatch
 codec.sk_encode(sk: bytes) -> bytes                  # 32 B
 codec.sk_decode(data: bytes) -> bytes                # 32-byte seed
-codec.sk_state_encode(sk_state: dict) -> bytes       # BDS state (~16 KB at τ=3, ~134 KB at τ=20 under D256_K4)
+codec.sk_state_encode(sk_state: dict) -> bytes       # BDS state (~20 KB at τ=3, ~110 KB at τ=20 under D256_K4)
 codec.sk_state_decode(data: bytes) -> dict
 codec.pk_encode(pk) -> bytes
 codec.pk_decode(data) -> np.ndarray

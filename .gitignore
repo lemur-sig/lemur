@@ -89,3 +89,18 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Rust build dirs — all crates (covers misc/Chipmunk/target too)
+target/
+
+# Lemur CLI runtime outputs (keys/state/sigs/params/vectors — never commit)
+*.sk
+*.pk
+*.state
+*.sig
+*.bin
+vectors*.json
+
+# Sage parameter-experiment scratch (keep summary.txt / chipmunk_summary.txt)
+parameter/alpha/summary_statistics_*.txt
+parameter/alpha/raw_alpha*.txt

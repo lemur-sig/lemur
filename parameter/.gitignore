@@ -1,0 +1,50 @@
+
+
+# =========================
+# Sage generated files
+# =========================
+*.sage.py
+*.sage.pyc
+.sage/
+.sage_cache/
+
+# =========================
+# Python bytecode / cache
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# estimator / msis runtime outputs
+# =========================
+*.log
+*.out
+*.err
+*.tmp
+results/
+output/
+logs/
+
+# =========================
+# scientific python outputs
+# =========================
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.mat
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+*.ipynb
+
+# =========================
+# packaging artifacts
+# =========================
+*.egg-info/
+build/
+dist/

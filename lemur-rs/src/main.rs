@@ -169,10 +169,10 @@ fn parse_seed(hex_str: &str, name: &str) -> [u8; 32] {
 
 fn random_seed() -> [u8; 32] {
     let mut seed = [0u8; 32];
-    let r = std::fs::read("/dev/urandom").unwrap_or_default();
-    for (i, &b) in r.iter().take(32).enumerate() {
-        seed[i] = b;
-    }
+    getrandom::getrandom(&mut seed).unwrap_or_else(|e| {
+        eprintln!("error obtaining OS randomness: {e}");
+        process::exit(1);
+    });
     seed
 }
 
