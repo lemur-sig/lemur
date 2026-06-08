@@ -5,18 +5,18 @@ This repository accompanies the paper:
 > Yini Lin, Muhammed F. Esgin, Amin Sakzad, Ron Steinfeld, and
 > Markku-Juhani O. Saarinen.
 > **"Lemur: Scalable Post-Quantum Synchronized Multi-Signatures"**.
-> IACR Cryptology ePrint Archive, Report 2026/xxxx, 2026.
-> <https://eprint.iacr.org/2026/xxxx>
+> IACR Cryptology ePrint Archive, Report 2026/1161, 2026.
+> <https://eprint.iacr.org/2026/1161>
 
 Citation:
 
 ```bibtex
-@misc{cryptoeprint:2026/xxxx,
-  author       = {Yini Lin and Muhammed F. Esgin and Amin Sakzad and Ron Steinfeld and Markku-Juhani O. Saarinen},
-  title        = {Lemur: Scalable Post-Quantum Synchronized Multi-Signatures},
-  howpublished = {IACR Cryptology ePrint Archive, Report 2026/xxxx},
-  year         = {2026},
-  url          = {https://eprint.iacr.org/2026/xxxx}
+@misc{cryptoeprint:2026/1161,
+      author = {Yini Lin and Muhammed F. Esgin and Amin Sakzad and Ron Steinfeld and Markku-Juhani O. Saarinen},
+      title = {Lemur: Scalable Post-Quantum Synchronized Multi-Signatures},
+      howpublished = {Cryptology {ePrint} Archive, Paper 2026/1161},
+      year = {2026},
+      url = {https://eprint.iacr.org/2026/1161}
 }
 ```
 
